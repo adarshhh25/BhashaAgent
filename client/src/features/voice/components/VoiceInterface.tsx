@@ -78,10 +78,10 @@ export function VoiceInterface({
       </div>
 
       {/* Center Voice Orb & Live Transcript */}
-      <div className="flex-1 flex flex-col items-center justify-center py-2 min-h-0 relative z-10">
+      <div className="flex-1 flex flex-col items-center justify-center py-1.5 min-h-0 relative z-10">
         <VoiceOrb
           state={orbState}
-          size={120}
+          size={100}
           onClick={() => {
             if (isListening) {
               stopListening();
@@ -95,16 +95,18 @@ export function VoiceInterface({
         <VoiceStateIndicator
           state={presentationState}
           language={selectedLanguage}
-          className="mt-2"
+          className="mt-1.5"
         />
 
-        {/* Live Transcript Preview */}
-        <div className="w-full max-w-xs mt-2.5">
-          <TranscriptPreview
-            transcript={transcript}
-            language={selectedLanguage}
-          />
-        </div>
+        {/* Live Transcript Preview (hide empty placeholder if an error message is active) */}
+        {(Boolean(transcript?.text?.trim()) || !errorMessage) && (
+          <div className="w-full max-w-xs mt-2">
+            <TranscriptPreview
+              transcript={transcript}
+              language={selectedLanguage}
+            />
+          </div>
+        )}
 
         {/* Error message card if present */}
         {errorMessage && (
@@ -115,7 +117,7 @@ export function VoiceInterface({
       </div>
 
       {/* Bottom Controls */}
-      <div className="flex flex-col items-center gap-2.5 relative z-20 pt-1 pb-4 shrink-0">
+      <div className="flex flex-col items-center gap-2 relative z-20 pt-1 pb-3 shrink-0">
         {/* Playback Controls (visible when assistant speaks) */}
         {isSpeaking && (
           <div className="animate-fade-in">

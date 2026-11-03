@@ -36,8 +36,8 @@ export function MicrophoneButton({
   };
 
   const isLarge = size === 'large';
-  const btnSizeClass = isLarge ? 'w-16 h-16' : 'w-12 h-12';
-  const iconSizeClass = isLarge ? 'w-7 h-7' : 'w-5 h-5';
+  const btnSizeClass = isLarge ? 'w-14 h-14' : 'w-12 h-12';
+  const iconSizeClass = isLarge ? 'w-6 h-6' : 'w-5 h-5';
 
   return (
     <div className={`relative flex items-center justify-center ${className}`}>

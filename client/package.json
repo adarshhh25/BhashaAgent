@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && vite build && node scripts/prepare-extension.js",
     "build:extension": "tsc -b && vite build && node scripts/prepare-extension.js",
     "typecheck": "tsc -b",
     "test": "tsx --test tests/auth.test.js tests/conversation.test.js tests/memory.test.js tests/form.test.js tests/browser.test.js tests/voice.test.js",

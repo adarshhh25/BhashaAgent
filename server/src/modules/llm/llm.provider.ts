@@ -2,50 +2,63 @@ import { config } from "../../config/environment";
 import { LLMError } from "./llm.errors";
 import type { LLMMessage, LLMProvider, LLMRequest, LLMResponse } from "./llm.types";
 
-interface GroqToolCall {
-  id?: unknown;
-  function?: { name?: unknown; arguments?: unknown };
+function normalizeMessages(messages: LLMMessage[]): LLMMessage[] {
+  return messages.map((m) => {
+    if (m.role === "assistant" && m.toolCalls && m.toolCalls.length > 0) {
+      return {
+        role: "assistant",
+        content: m.content ?? "",
+        tool_calls: m.toolCalls.map((tc) => ({
+          id: tc.id,
+          type: "function",
+          function: { name: tc.name, arguments: tc.arguments },
+        })),
+      };
+    }
+    if (m.role === "tool") {
+      return { role: "tool", content: m.content, tool_call_id: m.toolCallId };
+    }
+    return { role: m.role, content: m.content };
+  });
 }
 
-function normalizeMessages(messages: LLMMessage[]) {
-  return messages.map((message) => ({
-    role: message.role,
-    content: message.content,
-    ...(message.toolCallId ? { tool_call_id: message.toolCallId } : {}),
-    ...(message.toolCalls ? {
-      tool_calls: message.toolCalls.map((call) => ({
-        id: call.id,
-        type: "function",
-        function: { name: call.name, arguments: call.arguments },
-      })),
-    } : {}),
-  }));
-}
-
-function parseResponse(payload: unknown): LLMResponse {
-  if (!payload || typeof payload !== "object") {
-    throw new LLMError("INVALID_RESPONSE", "Provider returned an invalid response");
-  }
-  const record = payload as Record<string, unknown>;
+function parseResponse(raw: unknown): LLMResponse {
+  if (!raw || typeof raw !== "object") throw new LLMError("INVALID_RESPONSE", "Provider returned invalid response format");
+  const record = raw as Record<string, unknown>;
   const choices = record.choices;
-  if (!Array.isArray(choices) || !choices[0] || typeof choices[0] !== "object") {
-    throw new LLMError("INVALID_RESPONSE", "Provider returned no assistant choice");
+  if (!Array.isArray(choices) || choices.length === 0) throw new LLMError("INVALID_RESPONSE", "Provider response contains no choices");
+  const firstChoice = choices[0];
+  if (!firstChoice || typeof firstChoice !== "object") throw new LLMError("INVALID_RESPONSE", "Invalid choice structure");
+  const assistant = (firstChoice as Record<string, unknown>).message as Record<string, unknown> | undefined;
+  if (!assistant || typeof assistant !== "object") throw new LLMError("INVALID_RESPONSE", "Missing message in choice");
+  const rawToolCalls = assistant.tool_calls;
+  if (rawToolCalls !== undefined && !Array.isArray(rawToolCalls)) {
+    throw new LLMError("INVALID_RESPONSE", "Invalid tool_calls structure");
   }
-  const message = (choices[0] as Record<string, unknown>).message;
-  if (!message || typeof message !== "object") {
-    throw new LLMError("INVALID_RESPONSE", "Provider returned no assistant message");
+  if (!rawToolCalls) {
+    const content = assistant.content;
+    if (typeof content !== "string" && content !== null && content !== undefined) {
+      throw new LLMError("INVALID_RESPONSE", "Invalid assistant content");
+    }
+    const usage = record.usage && typeof record.usage === "object" ? record.usage as Record<string, unknown> : undefined;
+    return {
+      content: typeof content === "string" ? content : undefined,
+      toolCalls: [],
+      usage: usage ? {
+        inputTokens: typeof usage.prompt_tokens === "number" ? usage.prompt_tokens : undefined,
+        outputTokens: typeof usage.completion_tokens === "number" ? usage.completion_tokens : undefined,
+      } : undefined,
+    };
   }
-  const assistant = message as Record<string, unknown>;
-  const rawToolCalls = Array.isArray(assistant.tool_calls) ? assistant.tool_calls as GroqToolCall[] : [];
-  const toolCalls = rawToolCalls.map((call) => {
-    if (typeof call.id !== "string" || !call.function || typeof call.function.name !== "string" || typeof call.function.arguments !== "string") {
+  const toolCalls = (rawToolCalls as Array<Record<string, unknown>>).map((call) => {
+    if (typeof call.id !== "string" || !call.function || typeof (call.function as Record<string, unknown>).name !== "string" || typeof (call.function as Record<string, unknown>).arguments !== "string") {
       throw new LLMError("INVALID_RESPONSE", "Provider returned an invalid tool call");
     }
-    return { id: call.id, name: call.function.name, arguments: call.function.arguments };
+    return { id: call.id, name: (call.function as Record<string, unknown>).name as string, arguments: (call.function as Record<string, unknown>).arguments as string };
   });
   const usage = record.usage && typeof record.usage === "object" ? record.usage as Record<string, unknown> : undefined;
   return {
-    content: typeof assistant.content === "string" ? assistant.content : undefined,
+    content: typeof assistant.content === "string" ? assistant.content as string : undefined,
     toolCalls,
     usage: usage ? {
       inputTokens: typeof usage.prompt_tokens === "number" ? usage.prompt_tokens : undefined,
@@ -59,40 +72,72 @@ export class HttpLLMProvider implements LLMProvider {
     if (config.llm.provider !== "groq" || !config.llm.apiKey || !config.llm.baseUrl || !config.llm.model) {
       throw new LLMError("MISSING_CONFIGURATION", "Groq provider configuration is missing");
     }
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), request.timeoutMs ?? config.llm.timeoutMs);
-    try {
-      const response = await fetch(config.llm.baseUrl, {
-        method: "POST",
-        headers: { "content-type": "application/json", authorization: `Bearer ${config.llm.apiKey}` },
-        body: JSON.stringify({
-          model: request.model ?? config.llm.model,
-          messages: normalizeMessages(request.messages),
-          tools: request.tools.map((tool) => ({
-            type: "function",
-            function: { name: tool.name, description: tool.description, parameters: tool.inputSchema },
-          })),
-          ...(request.tools.length > 0 ? { tool_choice: request.toolChoice ?? "auto" } : {}),
-          temperature: request.temperature ?? config.llm.temperature,
-          max_tokens: request.maxOutputTokens ?? config.llm.maxOutputTokens,
-          ...(request.tools.length === 0 ? { response_format: { type: "json_object" } } : {}),
-        }),
-        signal: controller.signal,
-      });
-      if (!response.ok) {
-        const status = response.status;
-        if (status === 401 || status === 403) throw new LLMError("PROVIDER_UNAVAILABLE", "Groq authentication failed");
-        if (status === 429) throw new LLMError("RATE_LIMITED", "Groq rate limit exceeded");
-        throw new LLMError("PROVIDER_UNAVAILABLE", "Groq provider request failed");
+
+    const maxRetries = Math.max(0, config.llm.maxRetries ?? 2);
+
+    for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), request.timeoutMs ?? config.llm.timeoutMs);
+      try {
+        const response = await fetch(config.llm.baseUrl, {
+          method: "POST",
+          headers: { "content-type": "application/json", authorization: `Bearer ${config.llm.apiKey}` },
+          body: JSON.stringify({
+            model: request.model ?? config.llm.model,
+            messages: normalizeMessages(request.messages),
+            tools: request.tools.map((tool) => ({
+              type: "function",
+              function: { name: tool.name, description: tool.description, parameters: tool.inputSchema },
+            })),
+            ...(request.tools.length > 0 ? { tool_choice: request.toolChoice ?? "auto" } : {}),
+            temperature: request.temperature ?? config.llm.temperature,
+            max_tokens: request.maxOutputTokens ?? config.llm.maxOutputTokens,
+            ...(request.tools.length === 0 ? { response_format: { type: "json_object" } } : {}),
+          }),
+          signal: controller.signal,
+        });
+
+        if (!response.ok) {
+          const status = response.status;
+          if (status === 401 || status === 403) throw new LLMError("PROVIDER_UNAVAILABLE", "Groq authentication failed");
+
+          if (status === 429) {
+            if (attempt < maxRetries) {
+              const retryAfterHeader = response.headers.get("retry-after");
+              const parsedSec = retryAfterHeader ? Number.parseFloat(retryAfterHeader) : Number.NaN;
+              const waitMs = Number.isFinite(parsedSec) && parsedSec > 0 ? Math.min(parsedSec * 1000, 5000) : Math.min(1500 * Math.pow(2, attempt), 4000);
+              console.warn(`[HttpLLMProvider] Rate limited (429), retrying in ${waitMs}ms (attempt ${attempt + 1}/${maxRetries})...`);
+              await new Promise((resolve) => setTimeout(resolve, waitMs));
+              continue;
+            }
+            throw new LLMError("RATE_LIMITED", "Groq rate limit exceeded");
+          }
+
+          if (status >= 500 && status < 600 && attempt < maxRetries) {
+            const waitMs = Math.min(1000 * Math.pow(2, attempt), 3000);
+            console.warn(`[HttpLLMProvider] Provider error (${status}), retrying in ${waitMs}ms...`);
+            await new Promise((resolve) => setTimeout(resolve, waitMs));
+            continue;
+          }
+
+          throw new LLMError("PROVIDER_UNAVAILABLE", "Groq provider request failed");
+        }
+
+        return parseResponse(await response.json());
+      } catch (error) {
+        if (error instanceof LLMError) throw error;
+        if (error instanceof Error && error.name === "AbortError") throw new LLMError("TIMEOUT", "Groq provider timed out");
+        if (attempt < maxRetries) {
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+          continue;
+        }
+        throw new LLMError("PROVIDER_UNAVAILABLE", "Groq provider is unavailable");
+      } finally {
+        clearTimeout(timeout);
       }
-      return parseResponse(await response.json());
-    } catch (error) {
-      if (error instanceof LLMError) throw error;
-      if (error instanceof Error && error.name === "AbortError") throw new LLMError("TIMEOUT", "Groq provider timed out");
-      throw new LLMError("PROVIDER_UNAVAILABLE", "Groq provider is unavailable");
-    } finally {
-      clearTimeout(timeout);
     }
+
+    throw new LLMError("PROVIDER_UNAVAILABLE", "Groq provider request failed");
   }
 
   async healthCheck() {

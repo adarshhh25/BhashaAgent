@@ -40,7 +40,7 @@ export const config = {
     model: firstNonEmpty(process.env.LLM_MODEL, process.env.GROQ_MODEL) ?? "",
     baseUrl: firstNonEmpty(process.env.LLM_BASE_URL, process.env.GROQ_BASE_URL) ?? "https://api.groq.com/openai/v1/chat/completions",
     timeoutMs: Number.parseInt(process.env.LLM_TIMEOUT_MS ?? "30000", 10),
-    maxRetries: Number.parseInt(process.env.LLM_MAX_RETRIES ?? "1", 10),
+    maxRetries: Number.parseInt(process.env.LLM_MAX_RETRIES ?? "2", 10),
     maxOutputTokens: Number.parseInt(process.env.LLM_MAX_OUTPUT_TOKENS ?? "700", 10),
     temperature: Number.parseFloat(process.env.LLM_TEMPERATURE ?? "0.2"),
   },
@@ -52,7 +52,7 @@ export const config = {
     format: "verbatim",
     sampleRate: 16000,
     frameBytes: 1024,
-    idleTimeoutSeconds: 60,
+    idleTimeoutSeconds: Number.parseInt(process.env.GNANI_IDLE_TIMEOUT_SECONDS ?? "120", 10),
     maxSessionMs: 15 * 60 * 1000,
   },
   gnaniTts: {
