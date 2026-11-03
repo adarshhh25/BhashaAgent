@@ -1,0 +1,52 @@
+/**
+ * prepare-extension.js
+ *
+ * Post-build script that copies Chrome Extension assets
+ * (manifest.json, icons) into the dist/ output directory.
+ *
+ * Run via: npm run build:extension
+ */
+
+import { copyFileSync, cpSync, existsSync, mkdirSync } from 'node:fs';
+import { resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const root = resolve(__dirname, '..');
+const dist = resolve(root, 'dist');
+
+// Ensure dist exists
+if (!existsSync(dist)) {
+  console.error('Error: dist/ directory not found. Run "vite build" first.');
+  process.exit(1);
+}
+
+// Copy manifest.json
+const manifestSrc = resolve(root, 'manifest.json');
+const manifestDest = resolve(dist, 'manifest.json');
+copyFileSync(manifestSrc, manifestDest);
+console.log('✓ Copied manifest.json');
+
+// Copy icons
+const iconsSrc = resolve(root, 'public', 'icons');
+const iconsDest = resolve(dist, 'icons');
+
+if (existsSync(iconsSrc)) {
+  mkdirSync(iconsDest, { recursive: true });
+  cpSync(iconsSrc, iconsDest, { recursive: true });
+  console.log('✓ Copied icons/');
+} else {
+  console.warn('⚠ No public/icons/ directory found — extension will lack icons.');
+}
+
+// Copy AudioWorklet processor module
+const workletSrc = resolve(root, 'public', 'pcm-processor.js');
+const workletDest = resolve(dist, 'pcm-processor.js');
+if (existsSync(workletSrc)) {
+  copyFileSync(workletSrc, workletDest);
+  console.log('✓ Copied pcm-processor.js');
+}
+
+console.log('\n✓ Extension build ready at: dist/');
+console.log('  Load as unpacked extension in chrome://extensions/');
+
