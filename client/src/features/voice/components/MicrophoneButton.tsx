@@ -45,7 +45,7 @@ export function MicrophoneButton({
       {isListening && (
         <div
           aria-hidden="true"
-          className="absolute inset-0 rounded-full bg-accent/25 animate-ping pointer-events-none"
+          className="absolute inset-0 rounded-full bg-[#17483A]/25 animate-ping pointer-events-none"
         />
       )}
 
@@ -55,10 +55,10 @@ export function MicrophoneButton({
         disabled={disabled || isBusy}
         aria-label={isListening ? 'Stop listening' : 'Start voice interaction'}
         aria-pressed={isListening}
-        className={`relative z-10 rounded-full flex items-center justify-center transition-all shadow-md focus:outline-none focus-visible:ring-2 focus-visible:ring-accent cursor-pointer ${btnSizeClass} ${
+        className={`relative z-10 rounded-full flex items-center justify-center transition-all shadow-md focus:outline-none focus-visible:ring-2 focus-visible:ring-[#17483A] cursor-pointer ${btnSizeClass} ${
           isListening
-            ? 'bg-error text-white hover:bg-error/90 active:scale-95'
-            : 'bg-accent text-white hover:bg-accent/90 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed'
+            ? 'bg-[#C5221F] text-white hover:bg-[#C5221F]/90 active:scale-95'
+            : 'bg-[#17483A] text-white hover:bg-[#102A24] active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed'
         }`}
       >
         {isBusy ? (
@@ -72,4 +72,3 @@ export function MicrophoneButton({
     </div>
   );
 }
-

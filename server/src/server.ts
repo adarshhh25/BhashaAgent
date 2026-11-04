@@ -12,6 +12,23 @@ import { voiceRoutes } from "./modules/voice/voice.routes";
 
 export const app = express();
 app.disable("x-powered-by");
+
+// CORS middleware supporting Chrome extensions, web UI, and local development clients
+app.use((request, response, next) => {
+  const origin = request.headers.origin;
+  if (origin) {
+    response.setHeader("Access-Control-Allow-Origin", origin);
+    response.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
+    response.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, x-api-request-id");
+    response.setHeader("Access-Control-Allow-Credentials", "true");
+  }
+  if (request.method === "OPTIONS") {
+    response.sendStatus(204);
+    return;
+  }
+  next();
+});
+
 app.use(express.json({ limit: "32kb" }));
 app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/users", userRoutes);
@@ -39,7 +56,32 @@ if (require.main === module) {
   const { createServer } = require("node:http") as typeof import("node:http");
   const { attachVoiceGateway } = require("./modules/voice/voice.gateway") as typeof import("./modules/voice/voice.gateway");
   const { processVoiceTranscript } = require("./modules/agent/agent.service") as typeof import("./modules/agent/agent.service");
+
   const server = createServer(app);
   attachVoiceGateway(server, undefined, processVoiceTranscript);
-  server.listen(config.port, () => console.log(`BhashaAgent server listening on port ${config.port}`));
+
+  server.on("error", (err: Error) => {
+    console.error("[BhashaAgent] HTTP server error:", err.message);
+  });
+
+  server.listen(config.port, "0.0.0.0", () => {
+    console.log(`BhashaAgent server listening on 0.0.0.0:${config.port}`);
+  });
+
+  const shutdown = () => {
+    console.log("Shutting down BhashaAgent server gracefully...");
+    server.close(() => {
+      console.log("BhashaAgent server closed");
+      process.exit(0);
+    });
+  };
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
+
+  process.on("uncaughtException", (err) => {
+    console.error("[BhashaAgent] Uncaught exception:", err);
+  });
+  process.on("unhandledRejection", (reason) => {
+    console.error("[BhashaAgent] Unhandled rejection:", reason);
+  });
 }

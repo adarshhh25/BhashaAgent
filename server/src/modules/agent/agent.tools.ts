@@ -56,16 +56,112 @@ const proposalTool: AgentTool = {
 };
 
 const fieldValueTool: AgentTool = {
-  definition: { name: "propose_field_value", description: "Propose a value for a field in the selected current task. This never approves or fills it.", inputSchema: { type: "object", properties: { taskId: { type: "string" }, fieldId: { type: "string" }, value: {}, source: { type: "string" }, confidence: { type: "number" } }, required: ["taskId", "fieldId", "value", "source"] } },
+  definition: {
+    name: "propose_field_value",
+    description: "Propose a value for one or more fields in the selected current task. This never approves or fills it.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        taskId: { type: "string" },
+        fieldId: { type: "string", description: "The field id, identifier, name, or label" },
+        value: {},
+        source: { type: "string" },
+        confidence: { type: "number" },
+        proposals: {
+          type: "array",
+          description: "Optional batch of multiple field proposals",
+          items: {
+            type: "object",
+            properties: {
+              fieldId: { type: "string" },
+              value: {},
+              source: { type: "string" },
+              confidence: { type: "number" },
+            },
+            required: ["fieldId", "value", "source"],
+          },
+        },
+      },
+      required: ["taskId"],
+    },
+  },
   execute: async (userId, context, args) => {
-    const input = z.object({ taskId: z.string().uuid(), fieldId: z.string().uuid(), value: z.unknown(), source: z.enum(["USER_PROVIDED", "CONVERSATION", "USER_INPUT", "AI_SUGGESTION", "AGENT_PROPOSED"]), confidence: z.number().min(0).max(1).optional() }).strict().parse(args);
+    const input = z.object({
+      taskId: z.string().uuid(),
+      fieldId: z.string().min(1).optional(),
+      value: z.unknown().optional(),
+      source: z.enum(["USER_PROVIDED", "CONVERSATION", "USER_INPUT", "AI_SUGGESTION", "AGENT_PROPOSED"]).optional(),
+      confidence: z.number().min(0).max(1).optional(),
+      proposals: z.array(z.object({
+        fieldId: z.string().min(1),
+        value: z.unknown(),
+        source: z.enum(["USER_PROVIDED", "CONVERSATION", "USER_INPUT", "AI_SUGGESTION", "AGENT_PROPOSED"]),
+        confidence: z.number().min(0).max(1).optional(),
+      })).optional(),
+    }).strict().parse(args);
+
     if (context.formTask.id !== input.taskId) throw new Error("Field task is not the selected task");
-    const field = context.formTask.detectedFields.find((candidate) => candidate.id === input.fieldId);
+
+    // Handle batch proposals
+    if (input.proposals && input.proposals.length > 0) {
+      const results = [];
+      for (const proposal of input.proposals) {
+        const search = proposal.fieldId.toLowerCase();
+        const field = context.formTask.detectedFields.find((candidate) =>
+          candidate.id === proposal.fieldId ||
+          (candidate.fieldIdentifier && candidate.fieldIdentifier.toLowerCase() === search) ||
+          (candidate.name && candidate.name.toLowerCase() === search) ||
+          (candidate.label && candidate.label.toLowerCase() === search) ||
+          (candidate.label && candidate.label.toLowerCase().includes(search)) ||
+          (candidate.label && search.includes(candidate.label.toLowerCase()))
+        );
+        if (!field) continue;
+        const res = await setFieldValue(userId, input.taskId, field.id, {
+          value: proposal.value as never,
+          source: proposal.source,
+          confidence: proposal.confidence,
+        });
+        results.push({
+          id: res.id,
+          fieldId: field.id,
+          fieldIdentifier: field.fieldIdentifier,
+          label: field.label,
+          inputType: field.inputType,
+          value: proposal.value,
+          status: res.status,
+          redacted: field.inputType.toLowerCase() === "password",
+        });
+      }
+      return { taskId: input.taskId, updatedCount: results.length, results };
+    }
+
+    // Handle single field proposal
+    if (!input.fieldId || input.value === undefined || !input.source) {
+      throw new Error("Either proposals or fieldId, value, and source are required");
+    }
+
+    const search = input.fieldId.toLowerCase();
+    const field = context.formTask.detectedFields.find((candidate) =>
+      candidate.id === input.fieldId ||
+      (candidate.fieldIdentifier && candidate.fieldIdentifier.toLowerCase() === search) ||
+      (candidate.name && candidate.name.toLowerCase() === search) ||
+      (candidate.label && candidate.label.toLowerCase() === search) ||
+      (candidate.label && candidate.label.toLowerCase().includes(search)) ||
+      (candidate.label && search.includes(candidate.label.toLowerCase()))
+    );
     if (!field) throw new Error("Field is not part of the selected task");
-    const result = await setFieldValue(userId, input.taskId, input.fieldId, { value: input.value as never, source: input.source, confidence: input.confidence });
-    return field.inputType.toLowerCase() === "password"
-      ? { id: result.id, status: result.status, executionStatus: result.executionStatus, redacted: true }
-      : result;
+    const result = await setFieldValue(userId, input.taskId, field.id, { value: input.value as never, source: input.source, confidence: input.confidence });
+    return {
+      id: result.id,
+      fieldId: field.id,
+      fieldIdentifier: field.fieldIdentifier,
+      label: field.label,
+      inputType: field.inputType,
+      value: input.value,
+      status: result.status,
+      executionStatus: result.executionStatus,
+      redacted: field.inputType.toLowerCase() === "password",
+    };
   },
 };
 

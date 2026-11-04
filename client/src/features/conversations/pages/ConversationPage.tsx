@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { AlertCircle, RefreshCw, MessageSquarePlus } from 'lucide-react';
+import { AlertCircle, RefreshCw, MessageSquarePlus, FileText } from 'lucide-react';
 import { useConversations } from '../hooks/useConversations';
 import { useActiveConversation } from '../hooks/useActiveConversation';
+import { useActiveBrowserForm } from '../../browser/hooks/useActiveBrowserForm';
 import { ConversationLayout } from '../components/ConversationLayout';
 import { ConversationSidebar } from '../components/ConversationSidebar';
 import { ConversationHeader } from '../components/ConversationHeader';
@@ -48,6 +49,11 @@ export function ConversationPage() {
   const [editingMessage, setEditingMessage] = useState<Message | null>(null);
   const [isVoiceModeOpen, setIsVoiceModeOpen] = useState(false);
 
+  // Active Browser Form context sync
+  const currentConversationId = activeConversationId || conversationId;
+  const { activeFormTask, activeFormTaskId, fieldCount, rescan } =
+    useActiveBrowserForm(currentConversationId);
+
   // Sync route param with active conversation state
   useEffect(() => {
     if (conversationId && conversationId !== activeConversationId) {
@@ -87,9 +93,9 @@ export function ConversationPage() {
         navigate(`/conversations/${newConv.id}`);
         await selectConversation(newConv.id);
       }
-      await submitTurn(content);
+      await submitTurn(content, activeFormTaskId);
     },
-    [activeConversationId, createConversation, navigate, selectConversation, submitTurn],
+    [activeConversationId, activeFormTaskId, createConversation, navigate, selectConversation, submitTurn],
   );
 
   // Handle deleting active conversation
@@ -137,16 +143,32 @@ export function ConversationPage() {
         <VoiceInterface
           conversationId={activeConversationId}
           conversationTitle={activeConversation?.title}
+          formTaskId={activeFormTaskId}
+          activeFormTitle={activeFormTask?.title || activeFormTask?.webpageTitle}
+          fieldCount={fieldCount}
           conversationStatus={activeConversation?.status}
           selectedLanguage={selectedLanguage}
           onClose={() => setIsVoiceModeOpen(false)}
           onSendTranscriptMessage={async () => {
             // Reconcile messages from backend without duplicate message creation
             await reconcileMessages();
+            await rescan();
           }}
         />
       ) : (
         <div className="flex-1 flex flex-col min-h-0 relative">
+          {/* Active Browser Form Context Indicator */}
+          {activeFormTask && fieldCount > 0 && (
+            <div className="px-3.5 py-1.5 bg-secondary/20 border-b border-divider flex items-center justify-between text-xs text-text-primary shrink-0 animate-fade-in">
+              <div className="flex items-center gap-2 truncate">
+                <FileText className="w-3.5 h-3.5 text-accent shrink-0" />
+                <span className="font-medium truncate">{activeFormTask.title || 'Active Web Form'}</span>
+                <span className="text-[10px] bg-card border border-divider text-accent font-medium px-1.5 py-0.5 rounded-full shrink-0">
+                  {fieldCount} {fieldCount === 1 ? 'field' : 'fields'}
+                </span>
+              </div>
+            </div>
+          )}
           {isLoadingMessages ? (
             <div className="flex-1 flex flex-col items-center justify-center text-text-placeholder text-xs">
               <div className="w-6 h-6 border-2 border-accent border-t-transparent rounded-full animate-spin mb-2" />

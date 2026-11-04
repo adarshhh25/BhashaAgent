@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Languages, User, LogOut, ExternalLink, Loader2 } from 'lucide-react';
 import PopupLayout from '../../layouts/PopupLayout';
 import { useAuth } from '../../features/auth/hooks/useAuth';
@@ -8,18 +8,118 @@ import { RegisterForm } from '../../features/auth/components/RegisterForm';
 export default function PopupPage() {
   const { user, isAuthenticated, isLoading, logout } = useAuth();
   const [authView, setAuthView] = useState<'login' | 'register'>('login');
+  const [isOpening, setIsOpening] = useState(false);
+  const [openError, setOpenError] = useState<string | null>(null);
+  const activeTabIdRef = useRef<number | null>(null);
 
-  const handleOpenSidePanel = async () => {
-    if (typeof chrome !== 'undefined' && chrome.sidePanel && typeof chrome.sidePanel.open === 'function') {
-      try {
-        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  // Discover active Chrome tab immediately on popup mount so the tabId is resolved
+  // before the user clicks, enabling synchronous chrome.sidePanel.open() under user gesture
+  useEffect(() => {
+    if (typeof chrome !== 'undefined' && chrome.tabs?.query) {
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        const tab = tabs[0];
         if (tab?.id) {
-          await chrome.sidePanel.open({ tabId: tab.id });
-          window.close();
+          activeTabIdRef.current = tab.id;
+          console.log('[PopupPage] Discovered active tab for Side Panel:', {
+            tabId: tab.id,
+            url: tab.url,
+            sidePanelSupported: typeof chrome.sidePanel !== 'undefined',
+            openSupported: typeof chrome.sidePanel?.open === 'function',
+          });
+
+          // Pre-enable side panel for this specific tab to ensure tab-specific options are active
+          if (chrome.sidePanel?.setOptions) {
+            chrome.sidePanel
+              .setOptions({
+                tabId: tab.id,
+                path: 'index.html',
+                enabled: true,
+              })
+              .catch((err: unknown) => {
+                console.warn('[PopupPage] Pre-enabling side panel notice:', err);
+              });
+          }
         }
-      } catch {
-        // In case sidePanel.open is restricted, user can right-click toolbar icon
-      }
+      });
+    }
+  }, []);
+
+  /**
+   * Handle Open Side Panel click:
+   * Chrome requires chrome.sidePanel.open() to be called in direct response to a user action.
+   * We invoke it directly and synchronously without preceding awaits or background message hops.
+   */
+  const handleOpenSidePanel = () => {
+    if (isOpening) return;
+    setOpenError(null);
+
+    if (
+      typeof chrome === 'undefined' ||
+      !chrome.sidePanel ||
+      typeof chrome.sidePanel.open !== 'function'
+    ) {
+      const msg = 'Side Panel is not supported in this browser version.';
+      console.error('[PopupPage]', msg);
+      setOpenError(msg);
+      return;
+    }
+
+    const tabId = activeTabIdRef.current;
+    if (tabId) {
+      setIsOpening(true);
+      console.log('[PopupPage] Initiating chrome.sidePanel.open for tabId:', tabId);
+
+      // Invoke open directly within synchronous user gesture context
+      chrome.sidePanel
+        .open({ tabId })
+        .then(() => {
+          console.log('[PopupPage] Side Panel opened successfully for tabId:', tabId);
+          window.close();
+        })
+        .catch((err: unknown) => {
+          const message = err instanceof Error ? err.message : String(err);
+          console.error('[PopupPage] Failed to open side panel for tab:', tabId, message);
+          setOpenError(message);
+          setIsOpening(false);
+        });
+    } else {
+      // Fallback: resolve tab in user-gesture callback if clicked prior to mount resolution
+      setIsOpening(true);
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        const fallbackTabId = tabs[0]?.id;
+        if (!fallbackTabId) {
+          const msg = 'No active browser tab found to open side panel.';
+          console.error('[PopupPage]', msg);
+          setOpenError(msg);
+          setIsOpening(false);
+          return;
+        }
+
+        activeTabIdRef.current = fallbackTabId;
+
+        if (chrome.sidePanel?.setOptions) {
+          chrome.sidePanel
+            .setOptions({
+              tabId: fallbackTabId,
+              path: 'index.html',
+              enabled: true,
+            })
+            .catch(() => {});
+        }
+
+        chrome.sidePanel
+          .open({ tabId: fallbackTabId })
+          .then(() => {
+            console.log('[PopupPage] Side Panel opened via fallback for tabId:', fallbackTabId);
+            window.close();
+          })
+          .catch((err: unknown) => {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error('[PopupPage] Failed to open side panel via fallback:', message);
+            setOpenError(message);
+            setIsOpening(false);
+          });
+      });
     }
   };
 
@@ -65,14 +165,31 @@ export default function PopupPage() {
             </div>
 
             {/* Open Side Panel CTA */}
-            <button
-              type="button"
-              onClick={handleOpenSidePanel}
-              className="w-full h-9 rounded-md bg-accent text-white text-xs font-medium hover:bg-accent-hover transition-colors flex items-center justify-center gap-1.5 focus:outline-none"
-            >
-              <span>Open Side Panel</span>
-              <ExternalLink className="w-3.5 h-3.5" />
-            </button>
+            <div>
+              <button
+                type="button"
+                onClick={handleOpenSidePanel}
+                disabled={isOpening}
+                className="w-full h-9 rounded-md bg-accent text-white text-xs font-medium hover:bg-accent-hover transition-colors flex items-center justify-center gap-1.5 focus:outline-none disabled:opacity-70 disabled:cursor-not-allowed"
+              >
+                {isOpening ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Opening...</span>
+                  </>
+                ) : (
+                  <>
+                    <span>Open Side Panel</span>
+                    <ExternalLink className="w-3.5 h-3.5" />
+                  </>
+                )}
+              </button>
+              {openError && (
+                <p className="text-[11px] text-error mt-1.5 text-center leading-tight">
+                  {openError}
+                </p>
+              )}
+            </div>
           </div>
 
           {/* Footer with sign out */}
@@ -109,13 +226,9 @@ export default function PopupPage() {
 
           {/* Forms */}
           {authView === 'login' ? (
-            <LoginForm
-              onNavigateToRegister={() => setAuthView('register')}
-            />
+            <LoginForm onNavigateToRegister={() => setAuthView('register')} />
           ) : (
-            <RegisterForm
-              onNavigateToLogin={() => setAuthView('login')}
-            />
+            <RegisterForm onNavigateToLogin={() => setAuthView('login')} />
           )}
         </div>
       </div>

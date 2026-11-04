@@ -34,6 +34,43 @@ const outputSchema = z.object({
 }).strict();
 
 export function parseAgentOutput(value: unknown) {
-  const parsed = typeof value === "string" ? JSON.parse(value) : value;
+  let parsed = value;
+  if (typeof parsed === "string") {
+    let clean = parsed.trim();
+    if (clean.startsWith("```")) {
+      clean = clean.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+    }
+    parsed = JSON.parse(clean);
+  }
+
+  // Normalize structure for schema robustness
+  if (parsed && typeof parsed === "object") {
+    const p = parsed as Record<string, any>;
+    if (p.intent && typeof p.intent === "object") {
+      if (!agentIntents.includes(p.intent.primary)) {
+        p.intent.primary = "GENERAL_QUESTION";
+      }
+      if (!Array.isArray(p.intent.secondary)) {
+        p.intent.secondary = [];
+      } else {
+        p.intent.secondary = p.intent.secondary.filter((s: string) => agentIntents.includes(s as any));
+      }
+      if (typeof p.intent.confidence !== "number" || Number.isNaN(p.intent.confidence)) {
+        p.intent.confidence = 0.9;
+      }
+    }
+    if (p.decision && typeof p.decision === "object") {
+      if (!["respond", "clarify", "tool"].includes(p.decision.type)) {
+        p.decision.type = "respond";
+      }
+    }
+    if (!Array.isArray(p.toolCalls)) {
+      p.toolCalls = [];
+    }
+    if (!p.language || typeof p.language !== "object") {
+      p.language = { detected: "en", responseLanguage: "en" };
+    }
+  }
+
   return outputSchema.parse(parsed);
 }

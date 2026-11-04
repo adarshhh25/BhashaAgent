@@ -24,13 +24,17 @@ import { VoiceSessionManager } from '../services/voice-session.service';
 
 interface UseVoiceStateOptions {
   conversationId?: string | null;
+  formTaskId?: string | null;
   conversationStatus?: 'ACTIVE' | 'ARCHIVED' | 'DELETED';
+  language?: string;
   onFinalizedTurn?: (transcript: string) => Promise<void>;
 }
 
 export function useVoiceState({
   conversationId,
+  formTaskId,
   conversationStatus,
+  language,
   onFinalizedTurn,
 }: UseVoiceStateOptions = {}) {
   const [presentationState, setPresentationState] = useState<VoicePresentationState>('IDLE');
@@ -69,6 +73,30 @@ export function useVoiceState({
       },
       onAssistantResponse: (data) => {
         setAssistantResponseText(data.response);
+
+        // Execute browser actions in active Chrome tab if provided
+        if (data.formActions && data.formActions.length > 0) {
+          if (typeof chrome !== 'undefined' && chrome.tabs?.query) {
+            chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
+              if (tab?.id && tab.url && !tab.url.startsWith('chrome://') && !tab.url.startsWith('chrome-extension://')) {
+                const actions = data.formActions!.map((fa, index) => ({
+                  actionId: `voice-fill-${Date.now()}-${index}`,
+                  fieldId: fa.fieldId || fa.fieldIdentifier,
+                  fieldIdentifier: fa.fieldIdentifier,
+                  actionType: fa.actionType,
+                  value: fa.value,
+                }));
+                chrome.tabs.sendMessage(tab.id, {
+                  type: 'EXECUTE_FILL_INSTRUCTIONS',
+                  payload: { actions },
+                }).catch((err) => {
+                  console.warn('[useVoiceState] Action execution relay error:', err);
+                });
+              }
+            }).catch(() => {});
+          }
+        }
+
         // Safely reconcile messages in conversation history
         if (onFinalizedTurn) {
           void onFinalizedTurn(transcript?.text ?? data.response).catch(() => {
@@ -94,13 +122,45 @@ export function useVoiceState({
     });
   }
 
-  // Cleanup on unmount
+  // Cleanup on unmount, tab unload, and tab switch guard
   useEffect(() => {
+    const handleBeforeUnload = () => {
+      sessionManagerRef.current?.destroy();
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        // Tab was hidden or switched: stop active listening to prevent background audio leakage
+        sessionManagerRef.current?.stop();
+        setPresentationState((prev) => (prev === 'LISTENING' || prev === 'CONNECTING' ? 'IDLE' : prev));
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
       sessionManagerRef.current?.destroy();
       sessionManagerRef.current = null;
     };
   }, []);
+
+  // Update active form task on session manager dynamically
+  useEffect(() => {
+    if (sessionManagerRef.current && formTaskId !== undefined) {
+      sessionManagerRef.current.updateFormTaskId(formTaskId);
+    }
+  }, [formTaskId]);
+
+  // Teardown session when conversationId changes
+  const prevConvIdRef = useRef(conversationId);
+  useEffect(() => {
+    if (conversationId !== prevConvIdRef.current) {
+      prevConvIdRef.current = conversationId;
+      sessionManagerRef.current?.destroy();
+      setPresentationState('IDLE');
+      setTranscript(null);
+    }
+  }, [conversationId]);
 
   // Derived orb state
   const orbState: VoiceOrbState = mapToVoiceOrbState(presentationState);
@@ -157,7 +217,7 @@ export function useVoiceState({
       }
 
       setPresentationState('CONNECTING');
-      const success = await sessionManagerRef.current?.start(conversationId);
+      const success = await sessionManagerRef.current?.start(conversationId, formTaskId || undefined, language);
       if (!success) {
         setPresentationState('ERROR');
         return;
@@ -172,12 +232,14 @@ export function useVoiceState({
     }
   }, [
     conversationId,
+    formTaskId,
     conversationStatus,
     micError,
     micStatus,
     playbackState,
     presentationState,
     requestMicPermission,
+    language,
   ]);
 
   /**

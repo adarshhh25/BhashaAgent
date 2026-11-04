@@ -7,6 +7,7 @@ export const voiceProtocolMessageSchema = z.discriminatedUnion("messageType", [
     messageType: z.literal("START"),
     conversationId: z.string().uuid(),
     correlationId: z.string().uuid().optional(),
+    formTaskId: z.string().uuid().optional(),
   }),
   z.object({
     protocolVersion: z.literal(VOICE_PROTOCOL_VERSION),
@@ -17,6 +18,11 @@ export const voiceProtocolMessageSchema = z.discriminatedUnion("messageType", [
     protocolVersion: z.literal(VOICE_PROTOCOL_VERSION),
     messageType: z.literal("CANCEL"),
     correlationId: z.string().uuid().optional(),
+  }),
+  z.object({
+    protocolVersion: z.literal(VOICE_PROTOCOL_VERSION),
+    messageType: z.literal("UPDATE_FORM_TASK"),
+    formTaskId: z.string().uuid().nullable().optional(),
   }),
 ]);
 
@@ -34,15 +40,15 @@ export const providerEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("processing") }).passthrough(),
   z.object({
     type: z.literal("transcript"),
-    timestamp: z.string(),
+    timestamp: z.string().optional(),
     text: z.string().trim().min(1),
-    audio_duration_ms: z.number().nonnegative(),
-    segment_id: z.string().min(1),
-    segment_index: z.number().int().positive(),
-    latency: z.number().nonnegative(),
-    detected_language_code: z.string().min(1).optional(),
-    utterance_id: z.string().min(1),
-    is_final: z.literal(true),
+    audio_duration_ms: z.number().nonnegative().optional(),
+    segment_id: z.string().optional(),
+    segment_index: z.number().int().optional(),
+    latency: z.number().nonnegative().optional(),
+    detected_language_code: z.string().optional(),
+    utterance_id: z.string().optional(),
+    is_final: z.boolean().optional(),
   }).passthrough(),
   z.object({
     type: z.literal("partial"),

@@ -410,3 +410,41 @@ test("parses provider transcript events with floating duration and latency", asy
   assert.equal(message.transcript.latencyMs, 445.2);
   socket.close();
 });
+
+test("dynamically updates active form task via UPDATE_FORM_TASK message", async () => {
+  const ticketValue = await ticket();
+  const socket = new WebSocket(`${baseUrl.replace("http", "ws")}/api/v1/voice?ticket=${encodeURIComponent(ticketValue)}`);
+  await new Promise((resolve, reject) => { socket.once("open", resolve); socket.once("error", reject); });
+  socket.send(JSON.stringify({ protocolVersion: VOICE_PROTOCOL_VERSION, messageType: "START", conversationId: conversation.id }));
+  await nextMessage(socket, "connecting");
+  await nextMessage(socket, "ready");
+
+  const newTaskId = randomUUID();
+  socket.send(JSON.stringify({
+    protocolVersion: VOICE_PROTOCOL_VERSION,
+    messageType: "UPDATE_FORM_TASK",
+    formTaskId: newTaskId,
+  }));
+
+  // Wait a short tick for WebSocket message processing
+  await new Promise((resolve) => setTimeout(resolve, 50));
+
+  const provider = providers.at(-1);
+  const transcript = {
+    type: "transcript",
+    timestamp: new Date().toISOString(),
+    text: "अपडेट टेस्ट",
+    audioDurationMs: 500,
+    segmentId: "update-task-segment-1",
+    segmentIndex: 1,
+    latencyMs: 10,
+    detectedLanguageCode: "hi-IN",
+    utteranceId: "update-task-utterance-1",
+    isFinal: true,
+  };
+  provider.events(transcript);
+  const msg = await nextMessage(socket, "transcript");
+  assert.equal(msg.messageType, "TRANSCRIPT");
+
+  socket.close();
+});

@@ -1,4 +1,10 @@
-import "dotenv/config";
+import path from "node:path";
+import dotenv from "dotenv";
+
+// Robust environment resolution across process launch contexts
+dotenv.config();
+dotenv.config({ path: path.resolve(__dirname, "../../.env") });
+dotenv.config({ path: path.resolve(process.cwd(), "server/.env") });
 
 function firstNonEmpty(...values: Array<string | undefined>): string | undefined {
   return values.find((value) => value !== undefined && value.trim().length > 0);
@@ -35,7 +41,7 @@ export const config = {
   jwtAudience: process.env.JWT_AUDIENCE ?? "bhashaagent-api",
   refreshTokenExpiresInDays,
   llm: {
-    provider: firstNonEmpty(process.env.LLM_PROVIDER) ?? (firstNonEmpty(process.env.GROQ_API_KEY) ? "groq" : ""),
+    provider: firstNonEmpty(process.env.LLM_PROVIDER) ?? (firstNonEmpty(process.env.GEMINI_API_KEY) ? "gemini" : (firstNonEmpty(process.env.GROQ_API_KEY) ? "groq" : "")),
     apiKey: firstNonEmpty(process.env.LLM_API_KEY, process.env.GROQ_API_KEY) ?? "",
     model: firstNonEmpty(process.env.LLM_MODEL, process.env.GROQ_MODEL) ?? "",
     baseUrl: firstNonEmpty(process.env.LLM_BASE_URL, process.env.GROQ_BASE_URL) ?? "https://api.groq.com/openai/v1/chat/completions",
@@ -43,6 +49,15 @@ export const config = {
     maxRetries: Number.parseInt(process.env.LLM_MAX_RETRIES ?? "2", 10),
     maxOutputTokens: Number.parseInt(process.env.LLM_MAX_OUTPUT_TOKENS ?? "700", 10),
     temperature: Number.parseFloat(process.env.LLM_TEMPERATURE ?? "0.2"),
+  },
+  gemini: {
+    apiKey: firstNonEmpty(process.env.GEMINI_API_KEY) ?? "",
+    model: firstNonEmpty(process.env.GEMINI_MODEL) ?? "gemini-2.5-flash",
+    fallbackModel: firstNonEmpty(process.env.GEMINI_FALLBACK_MODEL) ?? "gemini-flash-lite-latest",
+    timeoutMs: Number.parseInt(process.env.GEMINI_TIMEOUT_MS ?? "30000", 10),
+    maxRetries: Number.parseInt(process.env.GEMINI_MAX_RETRIES ?? "2", 10),
+    maxOutputTokens: Number.parseInt(process.env.GEMINI_MAX_OUTPUT_TOKENS ?? "1000", 10),
+    temperature: Number.parseFloat(process.env.GEMINI_TEMPERATURE ?? "0.2"),
   },
   gnani: {
     apiKey: firstNonEmpty(process.env.GNANI) ?? "",

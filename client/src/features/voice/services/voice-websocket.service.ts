@@ -24,7 +24,18 @@ export interface VoiceWebSocketCallbacks {
   onSpeechStart?: () => void;
   onProcessing?: () => void;
   onTranscript?: (transcript: ServerTranscriptPayload) => void;
-  onAssistantResponse?: (data: { assistantMessageId: string; response: string; reused?: boolean }) => void;
+  onAssistantResponse?: (data: {
+    assistantMessageId: string;
+    response: string;
+    reused?: boolean;
+    formActions?: Array<{
+      actionType: 'SET_VALUE' | 'SELECT_OPTION' | 'CHECK' | 'UNCHECK';
+      fieldIdentifier: string;
+      fieldId?: string;
+      value: string | number | boolean | Array<string | number | boolean>;
+      label?: string;
+    }>;
+  }) => void;
   onAudioStart?: (requestId?: string) => void;
   onAudioChunk?: (chunkIndex: number, base64Audio: string) => void;
   onAudioComplete?: (chunkIndex: number) => void;
@@ -48,7 +59,7 @@ export class VoiceWebSocketClient {
   /**
    * Connect to backend voice WebSocket gateway with a fresh single-use ticket.
    */
-  async connect(conversationId: string): Promise<void> {
+  async connect(conversationId: string, formTaskId?: string, language?: string): Promise<void> {
     if (this.isConnecting) {
       throw new Error('A voice WebSocket connection attempt is already in progress');
     }
@@ -63,7 +74,7 @@ export class VoiceWebSocketClient {
 
     try {
       // 1. Acquire single-use voice ticket
-      const ticketData = await voiceService.createVoiceTicket(conversationId);
+      const ticketData = await voiceService.createVoiceTicket(conversationId, formTaskId, language);
       if (!ticketData?.ticket) {
         throw new Error('Failed to obtain voice session ticket');
       }
@@ -105,6 +116,7 @@ export class VoiceWebSocketClient {
             protocolVersion: VOICE_PROTOCOL_VERSION,
             messageType: 'START',
             conversationId,
+            ...(formTaskId ? { formTaskId } : {}),
           });
           resolve();
         };
@@ -196,6 +208,7 @@ export class VoiceWebSocketClient {
           assistantMessageId: event.assistantMessageId,
           response: event.response,
           reused: event.reused,
+          formActions: event.formActions,
         });
         break;
 
@@ -243,6 +256,19 @@ export class VoiceWebSocketClient {
   private sendJson(payload: Record<string, unknown>): void {
     if (this.socket && this.socket.readyState === WebSocket.OPEN) {
       this.socket.send(JSON.stringify(payload));
+    }
+  }
+
+  /**
+   * Dynamically update active form task ID.
+   */
+  updateFormTask(formTaskId: string | null | undefined): void {
+    if (this.socket && this.socket.readyState === WebSocket.OPEN && this.isReady) {
+      this.sendJson({
+        protocolVersion: VOICE_PROTOCOL_VERSION,
+        messageType: 'UPDATE_FORM_TASK',
+        formTaskId: formTaskId || undefined,
+      });
     }
   }
 

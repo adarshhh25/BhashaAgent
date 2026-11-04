@@ -33,6 +33,9 @@ export function ConversationProvider({ children }: ConversationProviderProps) {
   // Conversation List State
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [isLoadingList, setIsLoadingList] = useState(false);
+  const [isLoadingMoreConversations, setIsLoadingMoreConversations] = useState(false);
+  const [hasMoreConversations, setHasMoreConversations] = useState(false);
+  const [listPage, setListPage] = useState(1);
   const [listError, setListError] = useState<string | null>(null);
 
   // Active Conversation State
@@ -65,14 +68,39 @@ export function ConversationProvider({ children }: ConversationProviderProps) {
     setIsLoadingList(true);
     setListError(null);
     try {
-      const res = await conversationService.listConversations({ page: 1, limit: 50 });
+      const res = await conversationService.listConversations({ page: 1, limit: 15 });
       setConversations(res.conversations);
+      setListPage(1);
+      setHasMoreConversations(Boolean(res.pagination.hasMore));
     } catch (err) {
       setListError(err instanceof Error ? err.message : 'Failed to load conversations');
     } finally {
       setIsLoadingList(false);
     }
   }, [isAuthenticated]);
+
+  /**
+   * Load more conversations (infinite scroll pagination)
+   */
+  const loadMoreConversations = useCallback(async () => {
+    if (!isAuthenticated || isLoadingMoreConversations || !hasMoreConversations) return;
+    setIsLoadingMoreConversations(true);
+    try {
+      const nextPage = listPage + 1;
+      const res = await conversationService.listConversations({ page: nextPage, limit: 15 });
+      setConversations((prev) => {
+        const existingIds = new Set(prev.map((c) => c.id));
+        const newItems = res.conversations.filter((c) => !existingIds.has(c.id));
+        return [...prev, ...newItems];
+      });
+      setListPage(nextPage);
+      setHasMoreConversations(Boolean(res.pagination.hasMore));
+    } catch (err) {
+      console.error('Failed to load more conversations:', err);
+    } finally {
+      setIsLoadingMoreConversations(false);
+    }
+  }, [isAuthenticated, isLoadingMoreConversations, hasMoreConversations, listPage]);
 
   // Initial load when user becomes authenticated
   useEffect(() => {
@@ -95,9 +123,11 @@ export function ConversationProvider({ children }: ConversationProviderProps) {
       setIsLoadingList(true);
       setListError(null);
       try {
-        const res = await conversationService.listConversations({ page: 1, limit: 50 });
+        const res = await conversationService.listConversations({ page: 1, limit: 15 });
         if (isMounted) {
           setConversations(res.conversations);
+          setListPage(1);
+          setHasMoreConversations(Boolean(res.pagination.hasMore));
         }
       } catch (err) {
         if (isMounted) {
@@ -287,7 +317,7 @@ export function ConversationProvider({ children }: ConversationProviderProps) {
    * Submit user turn to Phase 7 Agent Orchestrator
    */
   const submitTurn = useCallback(
-    async (content: string) => {
+    async (content: string, formTaskId?: string) => {
       const trimmed = content.trim();
       if (!trimmed || !activeConversationId || isSubmittingTurn) return;
 
@@ -314,6 +344,7 @@ export function ConversationProvider({ children }: ConversationProviderProps) {
         const turnResult = await conversationService.submitTurn(activeConversationId, {
           content: trimmed,
           language: selectedLanguage,
+          formTaskId,
         });
 
         // 3. Update optimistic user message to persisted
@@ -422,8 +453,11 @@ export function ConversationProvider({ children }: ConversationProviderProps) {
     () => ({
       conversations,
       isLoadingList,
+      hasMoreConversations,
+      isLoadingMoreConversations,
       listError,
       refreshConversations,
+      loadMoreConversations,
       createConversation,
       renameConversation,
       archiveConversation,
@@ -448,8 +482,11 @@ export function ConversationProvider({ children }: ConversationProviderProps) {
     [
       conversations,
       isLoadingList,
+      hasMoreConversations,
+      isLoadingMoreConversations,
       listError,
       refreshConversations,
+      loadMoreConversations,
       createConversation,
       renameConversation,
       archiveConversation,

@@ -18,12 +18,15 @@ export const voiceService = {
   /**
    * Request a single-use voice session ticket for active conversation.
    */
-  async createVoiceTicket(conversationId: string): Promise<VoiceTicket> {
+  async createVoiceTicket(conversationId: string, formTaskId?: string, language?: string): Promise<VoiceTicket> {
     const res = await apiClient.post<ApiResponse<{ voice: VoiceTicket }>>(
       '/api/v1/voice/tickets',
-      { conversationId },
+      {
+        conversationId,
+        ...(formTaskId ? { formTaskId } : {}),
+        ...(language ? { language } : {}),
+      },
     );
     return res.data.voice;
   },
 };
-

@@ -22,7 +22,7 @@ export default defineConfig({
   build: {
     // Output to dist/ — this is the directory loaded as an unpacked extension
     outDir: 'dist',
-    emptyOutDir: true,
+    emptyOutDir: false,
 
     rollupOptions: {
       // Multiple entry points: Side Panel + Popup + Background Worker + Content Script

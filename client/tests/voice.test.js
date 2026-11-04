@@ -414,6 +414,36 @@ test.describe('Voice Protocol Validation & Schemas (FE-8)', () => {
     assert.equal(assistantEvent.success, true);
   });
 
+  test('validates server ASSISTANT_RESPONSE event with formActions payload', () => {
+    const assistantWithActions = serverVoiceEventSchema.safeParse({
+      protocolVersion: 'bhasha.voice.v1',
+      messageType: 'ASSISTANT_RESPONSE',
+      conversationId: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
+      assistantMessageId: 'msg-ast-124',
+      response: 'I have filled your full name.',
+      reused: false,
+      formActions: [
+        {
+          actionType: 'SET_VALUE',
+          fieldIdentifier: 'full_name',
+          fieldId: 'field-101',
+          value: 'Adarsh Jha',
+          label: 'Full Name',
+        },
+      ],
+    });
+    assert.equal(assistantWithActions.success, true);
+  });
+
+  test('validates client UPDATE_FORM_TASK message', () => {
+    const updateTaskMsg = clientVoiceMessageSchema.safeParse({
+      protocolVersion: 'bhasha.voice.v1',
+      messageType: 'UPDATE_FORM_TASK',
+      formTaskId: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
+    });
+    assert.equal(updateTaskMsg.success, true);
+  });
+
   test('validates server TTS AUDIO_CHUNK event', () => {
     const audioEvent = serverVoiceEventSchema.safeParse({
       protocolVersion: 'bhasha.voice.v1',

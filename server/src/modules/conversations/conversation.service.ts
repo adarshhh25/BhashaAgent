@@ -30,12 +30,15 @@ export function createConversation(userId: string, title?: string) {
 
 export async function listConversations(
   userId: string,
-  input: { page: number; limit: number; status?: "ACTIVE" | "ARCHIVED" | "DELETED" },
+  input: { page: number; limit: number; status?: "ACTIVE" | "ARCHIVED" | "DELETED"; search?: string },
 ) {
-  const where = {
+  const where: Prisma.ConversationWhereInput = {
     userId,
     ...(input.status ? { status: input.status } : { status: { not: "DELETED" as const } }),
   };
+  if (input.search && input.search.trim().length > 0) {
+    where.title = { contains: input.search.trim(), mode: "insensitive" };
+  }
   const [conversations, total] = await prisma.$transaction([
     prisma.conversation.findMany({
       where,
@@ -46,6 +49,7 @@ export async function listConversations(
     }),
     prisma.conversation.count({ where }),
   ]);
+  const hasMore = input.page * input.limit < total;
   return {
     conversations,
     pagination: {
@@ -53,6 +57,8 @@ export async function listConversations(
       limit: input.limit,
       total,
       totalPages: Math.ceil(total / input.limit),
+      hasMore,
+      nextPage: hasMore ? input.page + 1 : null,
     },
   };
 }

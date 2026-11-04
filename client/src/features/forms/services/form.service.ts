@@ -94,6 +94,34 @@ export const formService = {
   },
 
   /**
+   * Update webpage URL and title of a form task.
+   */
+  async updateWebpage(
+    taskId: string,
+    data: { webpageUrl: string; title?: string; metadata?: Record<string, unknown> },
+  ): Promise<FormTask> {
+    const res = await apiClient.put<ApiResponse<{ task: FormTask }>>(
+      `${API_PREFIX}/${taskId}/webpage`,
+      data,
+    );
+    return res.data.task;
+  },
+
+  /**
+   * Add detected fields to an existing form task.
+   */
+  async addFields(
+    taskId: string,
+    fields: Array<Record<string, unknown>>,
+  ): Promise<DetectedField[]> {
+    const res = await apiClient.post<ApiResponse<{ fields: DetectedField[] }>>(
+      `${API_PREFIX}/${taskId}/fields`,
+      { fields },
+    );
+    return res.data.fields;
+  },
+
+  /**
    * List detected fields for a form task.
    */
   async listFields(taskId: string): Promise<DetectedField[]> {

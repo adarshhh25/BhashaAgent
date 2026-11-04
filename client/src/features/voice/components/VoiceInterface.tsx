@@ -1,4 +1,4 @@
-import { MessageSquare, X } from 'lucide-react';
+import { MessageSquare, X, FileText } from 'lucide-react';
 import { VoiceOrb } from './VoiceOrb';
 import { MicrophoneButton } from './MicrophoneButton';
 import { VoiceStateIndicator } from './VoiceStateIndicator';
@@ -12,6 +12,9 @@ import type { SupportedLanguage } from '../../conversations/types/conversation.t
 interface VoiceInterfaceProps {
   conversationId?: string | null;
   conversationTitle?: string | null;
+  formTaskId?: string | null;
+  activeFormTitle?: string | null;
+  fieldCount?: number;
   conversationStatus?: 'ACTIVE' | 'ARCHIVED' | 'DELETED';
   selectedLanguage: SupportedLanguage;
   onClose: () => void;
@@ -22,6 +25,9 @@ interface VoiceInterfaceProps {
 export function VoiceInterface({
   conversationId,
   conversationTitle,
+  formTaskId,
+  activeFormTitle,
+  fieldCount = 0,
   conversationStatus,
   selectedLanguage,
   onClose,
@@ -35,6 +41,7 @@ export function VoiceInterface({
     orbState,
     transcript,
     playbackState,
+    assistantResponseText,
     errorMessage,
     startListening,
     stopListening,
@@ -44,7 +51,9 @@ export function VoiceInterface({
     stopPlayback,
   } = useVoiceState({
     conversationId,
+    formTaskId,
     conversationStatus,
+    language: selectedLanguage,
     onFinalizedTurn: onSendTranscriptMessage,
   });
 
@@ -53,14 +62,22 @@ export function VoiceInterface({
 
   return (
     <div
-      className={`flex-1 flex flex-col justify-between p-3.5 min-h-0 overflow-y-auto bg-page-bg relative select-none animate-fade-in ${className}`}
+      className={`flex-1 flex flex-col justify-between h-full min-h-0 overflow-hidden px-4 pt-3 pb-8 bg-page-bg relative select-none animate-fade-in ${className}`}
     >
       {/* Top Header Row */}
       <div className="flex items-center justify-between gap-3 relative z-20 shrink-0">
         <div className="min-w-0">
-          <h2 className="text-xs font-semibold text-text-primary tracking-tight truncate">
-            {strings.voiceModeTitle}
-          </h2>
+          <div className="flex items-center gap-2">
+            <h2 className="text-xs font-semibold text-text-primary tracking-tight truncate">
+              {strings.voiceModeTitle}
+            </h2>
+            {activeFormTitle && (
+              <span className="text-[10px] bg-[#DCE7DC] text-[#102A24] font-medium px-1.5 py-0.5 rounded border border-[#17483A]/20 truncate max-w-[140px] flex items-center gap-1">
+                <FileText className="w-3 h-3 shrink-0" />
+                <span className="truncate">{activeFormTitle}</span>
+              </span>
+            )}
+          </div>
           <p className="text-[11px] text-text-secondary truncate mt-0.5">
             {conversationTitle || 'Active Conversation'}
           </p>
@@ -77,11 +94,24 @@ export function VoiceInterface({
         </button>
       </div>
 
+      {/* Active Form Status Banner */}
+      {activeFormTitle && fieldCount > 0 && (
+        <div className="w-full max-w-xs mx-auto mt-2 px-3 py-1.5 bg-card border border-divider rounded-lg flex items-center justify-between text-[11px] text-text-primary shadow-2xs shrink-0 animate-fade-in">
+          <div className="flex items-center gap-1.5 min-w-0">
+            <FileText className="w-3.5 h-3.5 text-accent shrink-0" />
+            <span className="font-medium truncate">{activeFormTitle}</span>
+          </div>
+          <div className="flex items-center gap-1.5 text-[10px] text-text-secondary shrink-0">
+            <span className="text-accent font-medium">{fieldCount} {fieldCount === 1 ? 'field' : 'fields'} detected</span>
+          </div>
+        </div>
+      )}
+
       {/* Center Voice Orb & Live Transcript */}
-      <div className="flex-1 flex flex-col items-center justify-center py-1.5 min-h-0 relative z-10">
+      <div className="flex-1 flex flex-col items-center justify-center py-2 min-h-0 overflow-y-auto relative z-10 w-full max-w-sm mx-auto space-y-2">
         <VoiceOrb
           state={orbState}
-          size={100}
+          size={96}
           onClick={() => {
             if (isListening) {
               stopListening();
@@ -95,12 +125,12 @@ export function VoiceInterface({
         <VoiceStateIndicator
           state={presentationState}
           language={selectedLanguage}
-          className="mt-1.5"
+          className="mt-1"
         />
 
         {/* Live Transcript Preview (hide empty placeholder if an error message is active) */}
         {(Boolean(transcript?.text?.trim()) || !errorMessage) && (
-          <div className="w-full max-w-xs mt-2">
+          <div className="w-full max-w-xs">
             <TranscriptPreview
               transcript={transcript}
               language={selectedLanguage}
@@ -108,19 +138,26 @@ export function VoiceInterface({
           </div>
         )}
 
+        {/* Assistant Response Text Preview */}
+        {assistantResponseText && !errorMessage && (
+          <div className="w-full max-w-xs p-2.5 bg-card border border-divider rounded-xl text-xs text-text-primary text-center shadow-2xs animate-fade-in">
+            <p className="line-clamp-3 leading-relaxed">{assistantResponseText}</p>
+          </div>
+        )}
+
         {/* Error message card if present */}
         {errorMessage && (
-          <div className="w-full max-w-xs mt-2">
+          <div className="w-full max-w-xs">
             <VoiceErrorMessage message={errorMessage} onRetry={() => void startListening()} />
           </div>
         )}
       </div>
 
       {/* Bottom Controls */}
-      <div className="flex flex-col items-center gap-2 relative z-20 pt-1 pb-3 shrink-0">
+      <div className="flex flex-col items-center gap-2.5 relative z-20 pt-2 pb-2 shrink-0">
         {/* Playback Controls (visible when assistant speaks) */}
         {isSpeaking && (
-          <div className="animate-fade-in">
+          <div className="animate-fade-in mb-1">
             <VoicePlaybackControls
               playbackState={playbackState}
               onPlay={() => void resumePlayback()}

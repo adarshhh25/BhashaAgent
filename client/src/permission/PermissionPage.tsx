@@ -63,13 +63,13 @@ export function PermissionPage() {
   return (
     <div className="bg-white rounded-2xl shadow-lg border border-gray-100 p-8 text-center flex flex-col items-center">
       {/* Icon header */}
-      <div className="w-16 h-16 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center mb-5 shadow-xs">
+      <div className="w-16 h-16 rounded-2xl bg-[#DCE7DC] text-[#102A24] flex items-center justify-center mb-5 shadow-xs">
         {status === 'GRANTED' ? (
-          <CheckCircle2 className="w-9 h-9 text-emerald-600 animate-fade-in" />
+          <CheckCircle2 className="w-9 h-9 text-[#1E6B42] animate-fade-in" />
         ) : status === 'DENIED' ? (
           <AlertCircle className="w-9 h-9 text-rose-600 animate-fade-in" />
         ) : (
-          <Mic className="w-9 h-9 text-blue-600" />
+          <Mic className="w-9 h-9 text-[#102A24]" />
         )}
       </div>
 
@@ -106,7 +106,7 @@ export function PermissionPage() {
             type="button"
             onClick={() => void handleRequestPermission()}
             disabled={status === 'REQUESTING'}
-            className="w-full py-3 px-5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-medium text-sm transition-all shadow-sm hover:shadow active:scale-[0.99] disabled:opacity-50 flex items-center justify-center gap-2"
+            className="w-full py-3 px-5 rounded-xl bg-[#102A24] hover:bg-[#17483A] text-white font-medium text-sm transition-all shadow-sm hover:shadow active:scale-[0.99] disabled:opacity-50 flex items-center justify-center gap-2 cursor-pointer"
           >
             <Mic className="w-4 h-4" />
             <span>

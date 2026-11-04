@@ -15,21 +15,21 @@ export function VoiceStateIndicator({
 }: VoiceStateIndicatorProps) {
   const label = getLocalizedStateLabel(state, language);
 
-  let dotColor = 'bg-accent';
-  let badgeBg = 'bg-accent/10 border-accent/20 text-accent';
+  let dotColor = 'bg-[#17483A]';
+  let badgeBg = 'bg-[#17483A]/10 border-[#17483A]/20 text-[#17483A]';
 
   if (state === 'LISTENING') {
-    dotColor = 'bg-error animate-pulse';
-    badgeBg = 'bg-error/10 border-error/20 text-error';
+    dotColor = 'bg-[#102A24] animate-pulse';
+    badgeBg = 'bg-[#DCE7DC] border-[#17483A]/30 text-[#102A24] font-semibold';
   } else if (state === 'PROCESSING' || state === 'CONNECTING' || state === 'RECONNECTING') {
-    dotColor = 'bg-warning animate-pulse';
-    badgeBg = 'bg-warning/10 border-warning/20 text-warning';
+    dotColor = 'bg-[#B25000] animate-pulse';
+    badgeBg = 'bg-[#B25000]/10 border-[#B25000]/25 text-[#B25000]';
   } else if (state === 'SPEAKING') {
-    dotColor = 'bg-success animate-pulse';
-    badgeBg = 'bg-success/10 border-success/20 text-success';
+    dotColor = 'bg-[#1E6B42] animate-pulse';
+    badgeBg = 'bg-[#1E6B42]/10 border-[#1E6B42]/25 text-[#1E6B42]';
   } else if (state === 'ERROR') {
-    dotColor = 'bg-error';
-    badgeBg = 'bg-error/10 border-error/20 text-error';
+    dotColor = 'bg-[#C5221F]';
+    badgeBg = 'bg-[#C5221F]/10 border-[#C5221F]/25 text-[#C5221F]';
   }
 
   return (
@@ -41,4 +41,3 @@ export function VoiceStateIndicator({
     </div>
   );
 }
-

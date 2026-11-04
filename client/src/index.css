@@ -18,28 +18,33 @@
  * Using @theme to register custom design tokens as Tailwind utilities
  * ---------------------------------------------------------------------------*/
 @theme {
-  /* Base colors */
-  --color-page-bg: #F5F5F7;
+  /* Base colors — BhashaAgent Brand Palette */
+  --color-page-bg: #F7F6F1;
   --color-card: #FFFFFF;
-  --color-input-bg: #FAFAFC;
-  --color-divider: #E8E8ED;
-  --color-input-border: #D2D2D7;
-  --color-text-primary: #1D1D1F;
-  --color-text-secondary: #6E6E73;
-  --color-text-placeholder: #86868B;
-  --color-accent: #0071E3;
-  --color-accent-hover: #0061C2;
+  --color-input-bg: #FFFFFF;
+  --color-divider: #E5E1D8;
+  --color-input-border: #E5E1D8;
+  --color-text-primary: #102A24;
+  --color-text-secondary: #252923;
+  --color-text-placeholder: #7B8278;
+  --color-accent: #17483A;
+  --color-accent-hover: #102A24;
+  --color-forest-green: #102A24;
+  --color-primary-action: #17483A;
+  --color-sage: #DCE7DC;
+  --color-charcoal: #252923;
+  --color-warm-ivory: #F7F6F1;
 
   /* Semantic feedback colors */
-  --color-success: #248A3D;
-  --color-error: #D70015;
+  --color-success: #1E6B42;
+  --color-error: #C5221F;
   --color-warning: #B25000;
 
   /* Voice-state colors */
-  --color-voice-idle: #0071E3;
-  --color-voice-listening: #008CD2;
-  --color-voice-thinking: #6E5AD7;
-  --color-voice-speaking: #D7733C;
+  --color-voice-idle: #17483A;
+  --color-voice-listening: #102A24;
+  --color-voice-thinking: #4A6B5D;
+  --color-voice-speaking: #17483A;
 
   /* Typography */
   --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -59,27 +64,32 @@
  * ---------------------------------------------------------------------------*/
 :root {
   /* Base palette — mirrored for direct CSS usage */
-  --bh-page-bg: #F5F5F7;
+  --bh-page-bg: #F7F6F1;
   --bh-card: #FFFFFF;
-  --bh-input-bg: #FAFAFC;
-  --bh-divider: #E8E8ED;
-  --bh-input-border: #D2D2D7;
-  --bh-text-primary: #1D1D1F;
-  --bh-text-secondary: #6E6E73;
-  --bh-text-placeholder: #86868B;
-  --bh-accent: #0071E3;
-  --bh-accent-hover: #0061C2;
+  --bh-input-bg: #FFFFFF;
+  --bh-divider: #E5E1D8;
+  --bh-input-border: #E5E1D8;
+  --bh-text-primary: #102A24;
+  --bh-text-secondary: #252923;
+  --bh-text-placeholder: #7B8278;
+  --bh-accent: #17483A;
+  --bh-accent-hover: #102A24;
+  --bh-forest-green: #102A24;
+  --bh-primary-action: #17483A;
+  --bh-sage: #DCE7DC;
+  --bh-charcoal: #252923;
+  --bh-warm-ivory: #F7F6F1;
 
   /* Feedback */
-  --bh-success: #248A3D;
-  --bh-error: #D70015;
+  --bh-success: #1E6B42;
+  --bh-error: #C5221F;
   --bh-warning: #B25000;
 
   /* Voice states */
-  --bh-voice-idle: #0071E3;
-  --bh-voice-listening: #008CD2;
-  --bh-voice-thinking: #6E5AD7;
-  --bh-voice-speaking: #D7733C;
+  --bh-voice-idle: #17483A;
+  --bh-voice-listening: #102A24;
+  --bh-voice-thinking: #4A6B5D;
+  --bh-voice-speaking: #17483A;
 
   /* Font */
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -194,28 +204,33 @@ body {
  * Using @theme to register custom design tokens as Tailwind utilities
  * ---------------------------------------------------------------------------*/
 @theme {
-  /* Base colors */
-  --color-page-bg: #F5F5F7;
+  /* Base colors — BhashaAgent Brand Palette */
+  --color-page-bg: #F7F6F1;
   --color-card: #FFFFFF;
-  --color-input-bg: #FAFAFC;
-  --color-divider: #E8E8ED;
-  --color-input-border: #D2D2D7;
-  --color-text-primary: #1D1D1F;
-  --color-text-secondary: #6E6E73;
-  --color-text-placeholder: #86868B;
-  --color-accent: #0071E3;
-  --color-accent-hover: #0061C2;
+  --color-input-bg: #FFFFFF;
+  --color-divider: #E5E1D8;
+  --color-input-border: #E5E1D8;
+  --color-text-primary: #102A24;
+  --color-text-secondary: #252923;
+  --color-text-placeholder: #7B8278;
+  --color-accent: #17483A;
+  --color-accent-hover: #102A24;
+  --color-forest-green: #102A24;
+  --color-primary-action: #17483A;
+  --color-sage: #DCE7DC;
+  --color-charcoal: #252923;
+  --color-warm-ivory: #F7F6F1;
 
   /* Semantic feedback colors */
-  --color-success: #248A3D;
-  --color-error: #D70015;
+  --color-success: #1E6B42;
+  --color-error: #C5221F;
   --color-warning: #B25000;
 
   /* Voice-state colors */
-  --color-voice-idle: #0071E3;
-  --color-voice-listening: #008CD2;
-  --color-voice-thinking: #6E5AD7;
-  --color-voice-speaking: #D7733C;
+  --color-voice-idle: #17483A;
+  --color-voice-listening: #102A24;
+  --color-voice-thinking: #4A6B5D;
+  --color-voice-speaking: #17483A;
 
   /* Typography */
   --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -235,27 +250,32 @@ body {
  * ---------------------------------------------------------------------------*/
 :root {
   /* Base palette — mirrored for direct CSS usage */
-  --bh-page-bg: #F5F5F7;
+  --bh-page-bg: #F7F6F1;
   --bh-card: #FFFFFF;
-  --bh-input-bg: #FAFAFC;
-  --bh-divider: #E8E8ED;
-  --bh-input-border: #D2D2D7;
-  --bh-text-primary: #1D1D1F;
-  --bh-text-secondary: #6E6E73;
-  --bh-text-placeholder: #86868B;
-  --bh-accent: #0071E3;
-  --bh-accent-hover: #0061C2;
+  --bh-input-bg: #FFFFFF;
+  --bh-divider: #E5E1D8;
+  --bh-input-border: #E5E1D8;
+  --bh-text-primary: #102A24;
+  --bh-text-secondary: #252923;
+  --bh-text-placeholder: #7B8278;
+  --bh-accent: #17483A;
+  --bh-accent-hover: #102A24;
+  --bh-forest-green: #102A24;
+  --bh-primary-action: #17483A;
+  --bh-sage: #DCE7DC;
+  --bh-charcoal: #252923;
+  --bh-warm-ivory: #F7F6F1;
 
   /* Feedback */
-  --bh-success: #248A3D;
-  --bh-error: #D70015;
+  --bh-success: #1E6B42;
+  --bh-error: #C5221F;
   --bh-warning: #B25000;
 
   /* Voice states */
-  --bh-voice-idle: #0071E3;
-  --bh-voice-listening: #008CD2;
-  --bh-voice-thinking: #6E5AD7;
-  --bh-voice-speaking: #D7733C;
+  --bh-voice-idle: #17483A;
+  --bh-voice-listening: #102A24;
+  --bh-voice-thinking: #4A6B5D;
+  --bh-voice-speaking: #17483A;
 
   /* Font */
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;

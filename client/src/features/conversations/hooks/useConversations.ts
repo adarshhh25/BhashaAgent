@@ -10,14 +10,17 @@ export function useConversations() {
   return {
     conversations: context.conversations,
     isLoadingList: context.isLoadingList,
+    hasMoreConversations: context.hasMoreConversations,
+    isLoadingMoreConversations: context.isLoadingMoreConversations,
     listError: context.listError,
     refreshConversations: context.refreshConversations,
+    loadMoreConversations: context.loadMoreConversations,
     createConversation: context.createConversation,
     renameConversation: context.renameConversation,
     archiveConversation: context.archiveConversation,
     deleteConversation: context.deleteConversation,
     activeConversationId: context.activeConversationId,
+    activeConversation: context.activeConversation,
     selectConversation: context.selectConversation,
   };
 }
-

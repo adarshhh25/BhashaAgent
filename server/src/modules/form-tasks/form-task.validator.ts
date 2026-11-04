@@ -1,6 +1,13 @@
 import { z } from "zod";
 
-const json = z.record(z.string(), z.unknown()).optional();
+const json = z.union([
+  z.record(z.string(), z.unknown()),
+  z.array(z.unknown()),
+  z.string(),
+  z.number(),
+  z.boolean(),
+  z.null(),
+]).optional();
 const confidence = z.number().min(0).max(1).optional();
 
 export const taskCreateSchema = z.object({
@@ -45,8 +52,8 @@ export const fieldSchema = z.object({
   fieldKey: z.string().trim().max(255).optional(),
   label: z.string().trim().min(1).max(500),
   name: z.string().max(255).optional(),
-  elementType: z.string().trim().min(1).max(50),
-  inputType: z.string().trim().min(1).max(50),
+  elementType: z.string().trim().min(1).max(50).default("input"),
+  inputType: z.string().trim().min(1).max(50).default("TEXT"),
   placeholder: z.string().max(500).optional(),
   isRequired: z.boolean().default(false),
   isDisabled: z.boolean().default(false),
@@ -54,10 +61,10 @@ export const fieldSchema = z.object({
   detectedOrder: z.number().int().nonnegative().optional(),
   groupName: z.string().max(255).optional(),
   sectionName: z.string().max(255).optional(),
-  detectionConfidence: confidence,
-  options: json,
-  fieldMetadata: json,
-}).strict();
+  detectionConfidence: confidence.default(1),
+  options: json.optional(),
+  fieldMetadata: json.optional(),
+}).passthrough();
 
 export const fieldsSchema = z.object({
   fields: z.array(fieldSchema).min(1).max(500),

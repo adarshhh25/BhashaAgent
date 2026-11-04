@@ -59,10 +59,19 @@ export type TtsAdapterEvent =
   | { type: "error"; code: string; message: string };
 
 export interface TtsProvider {
-  synthesize(text: string): Promise<void>;
+  synthesize(text: string, language?: string): Promise<void>;
   close(): void;
   onEvent(listener: (event: TtsAdapterEvent) => void): void;
   onClose(listener: () => void): void;
+}
+
+function resolveTimbreLanguage(language?: string): string {
+  if (!language) return config.gnaniTts.language;
+  const l = language.toLowerCase();
+  if (l.startsWith("hi") || l === "hinglish") return "hi-IN";
+  if (l.startsWith("mr")) return "mr-IN";
+  if (l.startsWith("en")) return "en-IN";
+  return config.gnaniTts.language;
 }
 
 export class GnaniTimbreAdapter implements TtsProvider {
@@ -70,10 +79,11 @@ export class GnaniTimbreAdapter implements TtsProvider {
   private eventListener: (event: TtsAdapterEvent) => void = () => undefined;
   private closeListener: () => void = () => undefined;
 
-  async synthesize(text: string): Promise<void> {
+  async synthesize(text: string, language?: string): Promise<void> {
     validateTtsConfiguration();
     if (!config.gnaniTts.apiKey) throw new TtsConfigurationError("Gnani TTS provider is not configured");
     if (!text.trim()) throw new TtsConfigurationError("TTS text cannot be empty");
+    const targetLanguage = resolveTimbreLanguage(language);
     await new Promise<void>((resolve, reject) => {
       const socket = new WebSocket(config.gnaniTts.endpoint, {
         headers: { "X-API-Key-ID": config.gnaniTts.apiKey },
@@ -88,7 +98,7 @@ export class GnaniTimbreAdapter implements TtsProvider {
           text,
           voice: config.gnaniTts.voice,
           model: config.gnaniTts.model,
-          language: config.gnaniTts.language,
+          language: targetLanguage,
           speed: config.gnaniTts.speed,
           audio_config: {
             sample_rate: config.gnaniTts.sampleRate,

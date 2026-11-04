@@ -69,7 +69,7 @@ function parseResponse(raw: unknown): LLMResponse {
 
 export class HttpLLMProvider implements LLMProvider {
   async generateResponse(request: LLMRequest): Promise<LLMResponse> {
-    if (config.llm.provider !== "groq" || !config.llm.apiKey || !config.llm.baseUrl || !config.llm.model) {
+    if (!config.llm.apiKey || !config.llm.baseUrl || !config.llm.model) {
       throw new LLMError("MISSING_CONFIGURATION", "Groq provider configuration is missing");
     }
 
@@ -102,11 +102,25 @@ export class HttpLLMProvider implements LLMProvider {
           if (status === 401 || status === 403) throw new LLMError("PROVIDER_UNAVAILABLE", "Groq authentication failed");
 
           if (status === 429) {
-            if (attempt < maxRetries) {
-              const retryAfterHeader = response.headers.get("retry-after");
-              const parsedSec = retryAfterHeader ? Number.parseFloat(retryAfterHeader) : Number.NaN;
-              const waitMs = Number.isFinite(parsedSec) && parsedSec > 0 ? Math.min(parsedSec * 1000, 5000) : Math.min(1500 * Math.pow(2, attempt), 4000);
-              console.warn(`[HttpLLMProvider] Rate limited (429), retrying in ${waitMs}ms (attempt ${attempt + 1}/${maxRetries})...`);
+            let retrySec = Number.NaN;
+            const retryAfterHeader = response.headers.get("retry-after");
+            if (retryAfterHeader) {
+              retrySec = Number.parseFloat(retryAfterHeader);
+            }
+            let errorText = "";
+            try {
+              errorText = await response.text();
+            } catch {}
+            if (!Number.isFinite(retrySec) && errorText) {
+              const match = errorText.match(/try again in ([\d\.]+)s/i);
+              if (match) retrySec = Number.parseFloat(match[1]);
+            }
+            const max429Retries = Math.max(maxRetries, 4);
+            if (attempt < max429Retries) {
+              const waitMs = Number.isFinite(retrySec) && retrySec > 0
+                ? Math.min(Math.ceil(retrySec * 1000) + 600, 15000)
+                : Math.min(2000 * Math.pow(2, attempt), 8000);
+              console.warn(`[HttpLLMProvider] Rate limited (429), retrying in ${waitMs}ms (attempt ${attempt + 1}/${max429Retries})...`);
               await new Promise((resolve) => setTimeout(resolve, waitMs));
               continue;
             }

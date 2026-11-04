@@ -37,14 +37,16 @@ export const conversationService = {
     page?: number;
     limit?: number;
     status?: 'ACTIVE' | 'ARCHIVED';
+    search?: string;
   }): Promise<ConversationListResponse> {
     const res = await apiClient.get<ApiResponse<ConversationListResponse>>(
       '/api/v1/conversations',
       {
         params: {
           page: params?.page ?? 1,
-          limit: params?.limit ?? 20,
+          limit: params?.limit ?? 15,
           status: params?.status,
+          search: params?.search,
         },
       },
     );

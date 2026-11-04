@@ -3,14 +3,38 @@
  *
  * Coordinates extension-level browser operations:
  * - Active tab identification and context discovery
+ * - Tab-scoped Chrome Side Panel behavior (panels open only on explicit user request per tab)
  * - Content script injection and messaging relay
- * - Handles service worker suspension safely
+ * - Resource cleanup on tab closure
+ * - Cross-tab action execution safety
  */
+
+import { tabContextManager } from '../features/browser/services/tab-context-manager';
 
 interface ActiveTabContext {
   tabId: number;
   url: string;
   title: string;
+}
+
+/**
+ * Configure default side panel behavior on installation / startup:
+ * - Do not automatically toggle side panel on toolbar action click (show popup instead)
+ */
+if (typeof chrome !== 'undefined' && chrome.sidePanel) {
+  chrome.sidePanel.setPanelBehavior?.({ openPanelOnActionClick: false }).catch((err) => {
+    console.warn('[Background] setPanelBehavior error:', err);
+  });
+}
+
+// When a tab is removed, clean up tab-specific resources and tab-context state
+if (typeof chrome !== 'undefined' && chrome.tabs?.onRemoved) {
+  chrome.tabs.onRemoved.addListener((tabId) => {
+    tabContextManager.clearTab(tabId);
+    if (chrome.sidePanel?.setOptions) {
+      chrome.sidePanel.setOptions({ tabId, enabled: false }).catch(() => {});
+    }
+  });
 }
 
 /**
@@ -84,6 +108,15 @@ if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
           return;
         }
 
+        // Cross-tab safety guard: verify tab URL matches expected URL if provided
+        if (message.payload?.expectedUrl && !tab.url.startsWith(message.payload.expectedUrl)) {
+          sendResponse({
+            success: false,
+            error: 'Tab URL has changed; action aborted to prevent cross-tab contamination',
+          });
+          return;
+        }
+
         const ready = await ensureContentScriptReady(tab.tabId);
         if (!ready) {
           sendResponse({
@@ -109,4 +142,3 @@ if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
     return false;
   });
 }
-

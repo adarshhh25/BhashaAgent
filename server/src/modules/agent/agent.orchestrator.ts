@@ -10,6 +10,35 @@ import type { AgentLLMOutput, AgentTurnResult } from "./agent.types";
 const MAX_ITERATIONS = 3;
 const MAX_TOOL_CALLS = 4;
 
+function computeAdaptiveOutputBudget(context: AgentContext, iteration: number): number {
+  const content = context.request.currentUserMessage.content.trim().toLowerCase();
+
+  // Complex tasks: active form tasks, intelligent mapping, or multi-step tool iterations
+  if (context.formTask?.id || iteration > 0) {
+    return 1000;
+  }
+
+  // Detailed explanation or multi-step guide requests
+  const isDetailedRequest =
+    content.length > 80 ||
+    /explain|step by step|how to|guide|details|list|विस्तार|कसे|माहिती|प्रक्रिया/.test(content);
+  if (isDetailedRequest) {
+    return 1200;
+  }
+
+  // Simple questions, greetings, voice acknowledgments
+  if (content.length < 35 && !/explain|step by step|how to|guide|details|list|विस्तार/.test(content)) {
+    return 400;
+  }
+
+  // Standard conversations, queries, memories, corrections
+  if (content.length > 25 || content.includes("?") || content.includes("क्या") || content.includes("का")) {
+    return 650;
+  }
+
+  return 400;
+}
+
 function providerError(error: unknown): never {
   if (error instanceof HttpError) throw error;
   if (error instanceof LLMError && error.code === "INVALID_RESPONSE") {
@@ -37,12 +66,13 @@ export async function orchestrate(
   for (let iteration = 0; iteration < MAX_ITERATIONS; iteration += 1) {
     let response;
     const canUseTools = !toolsExecuted && (iteration === 0 || recoveryAttempts > 0);
+    const maxOutputTokens = computeAdaptiveOutputBudget(context, iteration);
     try {
       response = await provider.generateResponse({
         messages,
         tools: toolsExecuted || canUseTools ? toolDefinitions : [],
         toolChoice: canUseTools ? "auto" : "none",
-        maxOutputTokens: 700,
+        maxOutputTokens,
       });
     } catch (error) {
       if (iteration === 0 && error instanceof LLMError && error.code === "PROVIDER_UNAVAILABLE") {

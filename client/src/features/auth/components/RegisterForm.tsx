@@ -120,7 +120,7 @@ export function RegisterForm({ onNavigateToLogin }: RegisterFormProps) {
             type="text"
             value={fullName}
             onChange={(e) => setFullName(e.target.value)}
-            placeholder="Ada Lovelace"
+            placeholder="Enter Your Name"
             required
             disabled={isSubmitting}
             autoComplete="name"
@@ -143,7 +143,7 @@ export function RegisterForm({ onNavigateToLogin }: RegisterFormProps) {
             type="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            placeholder="name@example.com"
+            placeholder="Your Email"
             required
             disabled={isSubmitting}
             autoComplete="email"

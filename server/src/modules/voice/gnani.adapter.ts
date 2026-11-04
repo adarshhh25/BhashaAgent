@@ -39,10 +39,18 @@ export class GnaniPrismaAdapter implements SttProvider {
   private socket?: WebSocket;
   private eventListener: (event: GnaniAdapterEvent) => void = () => undefined;
   private closeListener: () => void = () => undefined;
+  private isExplicitlyClosed = false;
+  private isConnecting = false;
+  private frameBuffer: Buffer[] = [];
 
   async connect(): Promise<void> {
+    if (this.isExplicitlyClosed) return;
+    if (this.socket && this.socket.readyState === WebSocket.OPEN) return;
+    if (this.isConnecting) return;
+
     if (!config.gnani.apiKey) throw new Error("Gnani STT provider is not configured");
 
+    this.isConnecting = true;
     const requestId = randomUUID();
     console.log(`[GnaniPrisma] STT connection attempt: endpoint=${config.gnani.endpoint}, model=${config.gnani.model}, languageCode=${config.gnani.languageCode}, sampleRate=${config.gnani.sampleRate}, requestId=${requestId}`);
 
@@ -62,21 +70,34 @@ export class GnaniPrismaAdapter implements SttProvider {
       let settled = false;
 
       socket.on("open", () => {
+        this.isConnecting = false;
         console.log(`[GnaniPrisma] Provider connection success: WebSocket open (HTTP 101 Switching Protocols)`);
         if (!settled) { settled = true; resolve(); }
+        // Flush any queued frames
+        while (this.frameBuffer.length > 0 && this.socket?.readyState === WebSocket.OPEN) {
+          const f = this.frameBuffer.shift();
+          if (f) {
+            try { this.socket.send(f); } catch {}
+          }
+        }
       });
 
       socket.on("message", (data) => this.handleMessage(data.toString()));
 
       socket.on("error", (err) => {
+        this.isConnecting = false;
         console.error(`[GnaniPrisma] Provider connection failure: WebSocket error=${err.message || 'unknown'}`);
         if (!settled) { settled = true; reject(new Error("Gnani STT connection failed")); }
         this.eventListener({ type: "error", code: "PROVIDER_CONNECTION_FAILED", message: "Speech provider connection failed" });
       });
 
       socket.on("close", (code, reason) => {
+        this.isConnecting = false;
         console.log(`[GnaniPrisma] Provider WebSocket closed: code=${code}, reason=${reason ? reason.toString() : 'none'}`);
-        this.closeListener();
+        this.socket = undefined;
+        if (this.isExplicitlyClosed) {
+          this.closeListener();
+        }
       });
     });
   }
@@ -94,9 +115,38 @@ export class GnaniPrismaAdapter implements SttProvider {
     const parsed = providerEventSchema.safeParse(value);
     if (!parsed.success) {
       const rawObj = value as Record<string, unknown>;
+      if (rawObj?.type === "transcript" && typeof rawObj.text === "string" && rawObj.text.trim()) {
+        const text = rawObj.text.trim();
+        const segId = String(rawObj.segment_id || `seg-${Date.now()}`);
+        console.log(`[GnaniPrisma] Final transcript received (fallback parser): segmentId=${segId}, text="${text}"`);
+        this.eventListener({
+          type: "transcript",
+          text,
+          timestamp: String(rawObj.timestamp || new Date().toISOString()),
+          audioDurationMs: Number(rawObj.audio_duration_ms || 0),
+          segmentId: segId,
+          segmentIndex: Number(rawObj.segment_index || 1),
+          latencyMs: Number(rawObj.latency || 0),
+          detectedLanguageCode: rawObj.detected_language_code ? String(rawObj.detected_language_code) : undefined,
+          utteranceId: String(rawObj.utterance_id || `utt-${Date.now()}`),
+        });
+        return;
+      }
+
       if (rawObj?.type === "error") {
+        const rawMsg = String(rawObj.message ?? "");
+        const lowerMsg = rawMsg.toLowerCase();
+        if (lowerMsg.includes("no speech segment") || lowerMsg.includes("idle") || lowerMsg.includes("60 second") || lowerMsg.includes("inactivity")) {
+          console.log(`[GnaniPrisma] Provider STT stream idle timeout (silence). Closing stream cleanly, will reconnect on next speech.`);
+          if (this.socket && this.socket.readyState !== WebSocket.CLOSED) {
+            try { this.socket.close(); } catch {}
+          }
+          this.socket = undefined;
+          return;
+        }
+
         const code = providerErrorCode(String(rawObj.error_code ?? rawObj.code ?? ""));
-        const message = sanitizeProviderMessage(String(rawObj.message ?? ""));
+        const message = sanitizeProviderMessage(rawMsg);
         console.error(`[GnaniPrisma] Provider error: code=${code}, message=${message}`);
         this.eventListener({ type: "error", code, message });
         return;
@@ -132,19 +182,36 @@ export class GnaniPrismaAdapter implements SttProvider {
       console.log(`[GnaniPrisma] Partial transcript received from provider`);
       this.eventListener({ type: "partial", text: event.text ?? event.transcript });
     } else if (event.type === "transcript") {
-      console.log(`[GnaniPrisma] Final transcript received: segmentId=${event.segment_id}, durationMs=${event.audio_duration_ms}, latencyMs=${event.latency}, language=${event.detected_language_code ?? 'auto'}`);
+      const segId = event.segment_id || `seg-${Date.now()}`;
+      const durationMs = typeof event.audio_duration_ms === "number" ? event.audio_duration_ms : 0;
+      const latencyMs = typeof event.latency === "number" ? event.latency : 0;
+      const timestamp = event.timestamp || new Date().toISOString();
+      const segmentIndex = typeof event.segment_index === "number" ? event.segment_index : 1;
+      const utteranceId = event.utterance_id || `utt-${Date.now()}`;
+      console.log(`[GnaniPrisma] Final transcript received: segmentId=${segId}, durationMs=${durationMs}, latencyMs=${latencyMs}, language=${event.detected_language_code ?? 'auto'}`);
       this.eventListener({
         type: "transcript",
         text: event.text,
-        timestamp: event.timestamp,
-        audioDurationMs: event.audio_duration_ms,
-        segmentId: event.segment_id,
-        segmentIndex: event.segment_index,
-        latencyMs: event.latency,
+        timestamp,
+        audioDurationMs: durationMs,
+        segmentId: segId,
+        segmentIndex,
+        latencyMs,
         detectedLanguageCode: event.detected_language_code,
-        utteranceId: event.utterance_id,
+        utteranceId,
       });
     } else if (event.type === "error") {
+      const rawMsg = String(event.message ?? "");
+      const lowerMsg = rawMsg.toLowerCase();
+      if (lowerMsg.includes("no speech segment") || lowerMsg.includes("idle") || lowerMsg.includes("60 second") || lowerMsg.includes("inactivity")) {
+        console.log(`[GnaniPrisma] Provider STT stream idle timeout (silence). Closing stream cleanly, will reconnect on next speech.`);
+        if (this.socket && this.socket.readyState !== WebSocket.CLOSED) {
+          try { this.socket.close(); } catch {}
+        }
+        this.socket = undefined;
+        return;
+      }
+
       const code = providerErrorCode(event.error_code ?? event.code);
       const message = sanitizeProviderMessage(event.message);
       console.error(`[GnaniPrisma] Provider error: code=${code}, message=${message}`);
@@ -153,17 +220,30 @@ export class GnaniPrismaAdapter implements SttProvider {
   }
 
   sendFrame(frame: Buffer): void {
-    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
-      throw new Error("Speech provider is not ready");
+    if (this.isExplicitlyClosed) return;
+    if (this.socket && this.socket.readyState === WebSocket.OPEN) {
+      this.socket.send(frame);
+      return;
     }
-    this.socket.send(frame);
+    // Buffer frame while reconnecting (up to 30 frames ~ 1 sec of audio)
+    if (this.frameBuffer.length < 30) {
+      this.frameBuffer.push(frame);
+    }
+    if (!this.isConnecting && (!this.socket || this.socket.readyState !== WebSocket.OPEN)) {
+      void this.connect().catch((err: Error) => {
+        console.warn(`[GnaniPrisma] Reconnection attempt failed: ${err.message}`);
+      });
+    }
   }
 
   close(): void {
+    this.isExplicitlyClosed = true;
+    this.frameBuffer = [];
     if (this.socket && this.socket.readyState !== WebSocket.CLOSED) {
       this.socket.close();
     }
     this.socket = undefined;
+    this.closeListener();
   }
 
   onEvent(listener: (event: GnaniAdapterEvent) => void): void { this.eventListener = listener; }

@@ -9,8 +9,11 @@ export interface ConversationContextValue {
   // Conversation List
   conversations: Conversation[];
   isLoadingList: boolean;
+  hasMoreConversations: boolean;
+  isLoadingMoreConversations: boolean;
   listError: string | null;
   refreshConversations: () => Promise<void>;
+  loadMoreConversations: () => Promise<void>;
   createConversation: (title?: string) => Promise<Conversation>;
   renameConversation: (id: string, newTitle: string) => Promise<void>;
   archiveConversation: (id: string, archive: boolean) => Promise<void>;
@@ -32,10 +35,9 @@ export interface ConversationContextValue {
   turnError: string | null;
   selectedLanguage: SupportedLanguage;
   setSelectedLanguage: (lang: SupportedLanguage) => void;
-  submitTurn: (content: string) => Promise<void>;
+  submitTurn: (content: string, formTaskId?: string) => Promise<void>;
   correctUserMessage: (messageId: string, newContent: string) => Promise<void>;
   reconcileMessages: () => Promise<void>;
 }
 
 export const ConversationContext = createContext<ConversationContextValue | null>(null);
-

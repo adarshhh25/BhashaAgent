@@ -28,7 +28,18 @@ export interface VoiceSessionCallbacks {
   onPresentationStateChange?: (state: VoicePresentationState) => void;
   onPlaybackStateChange?: (state: AudioPlaybackState) => void;
   onTranscriptUpdate?: (transcript: VoiceTranscript) => void;
-  onAssistantResponse?: (data: { assistantMessageId: string; response: string; reused?: boolean }) => void;
+  onAssistantResponse?: (data: {
+    assistantMessageId: string;
+    response: string;
+    reused?: boolean;
+    formActions?: Array<{
+      actionType: 'SET_VALUE' | 'SELECT_OPTION' | 'CHECK' | 'UNCHECK';
+      fieldIdentifier: string;
+      fieldId?: string;
+      value: string | number | boolean | Array<string | number | boolean>;
+      label?: string;
+    }>;
+  }) => void;
   onReconnectSuccess?: () => void;
   onError?: (code: string, message: string) => void;
   onSessionEnded?: () => void;
@@ -40,6 +51,8 @@ export class VoiceSessionManager {
   private playbackManager: AudioPlaybackManager | null = null;
 
   private conversationId: string | null = null;
+  private formTaskId?: string;
+  private language?: string;
   private presentationState: VoicePresentationState = 'IDLE';
   private playbackState: AudioPlaybackState = 'IDLE';
   private callbacks: VoiceSessionCallbacks = {};
@@ -62,15 +75,18 @@ export class VoiceSessionManager {
   /**
    * Start end-to-end voice session for the given conversation.
    */
-  async start(conversationId: string): Promise<boolean> {
+  async start(conversationId: string, formTaskId?: string, language?: string): Promise<boolean> {
     if (this.isStarting || this.presentationState === 'LISTENING') {
       return true;
     }
 
     this.isStarting = true;
+    this.cleanup();
     this.isDestroyed = false;
     this.isFatalError = false;
     this.conversationId = conversationId;
+    this.formTaskId = formTaskId;
+    this.language = language;
     this.reconnectAttempts = 0;
 
     this.setPresentationState('CONNECTING');
@@ -200,7 +216,7 @@ export class VoiceSessionManager {
         },
       });
 
-      await this.wsClient.connect(conversationId);
+      await this.wsClient.connect(conversationId, formTaskId, language);
       this.isStarting = false;
       return true;
     } catch (err) {
@@ -259,6 +275,10 @@ export class VoiceSessionManager {
     };
 
     this.callbacks.onTranscriptUpdate?.(transcript);
+
+    if (payload.isFinal) {
+      this.setPresentationState('PROCESSING');
+    }
   }
 
   /**
@@ -270,6 +290,16 @@ export class VoiceSessionManager {
     }
     this.setPlaybackState('INTERRUPTED');
     this.setPresentationState('LISTENING');
+  }
+
+  /**
+   * Dynamically update active form task ID.
+   */
+  updateFormTaskId(formTaskId: string | null | undefined): void {
+    this.formTaskId = formTaskId || undefined;
+    if (this.wsClient) {
+      this.wsClient.updateFormTask(formTaskId);
+    }
   }
 
   /**
@@ -325,7 +355,7 @@ export class VoiceSessionManager {
       if (this.isDestroyed || !this.conversationId || this.isFatalError) return;
 
       void this.wsClient
-        ?.connect(this.conversationId)
+        ?.connect(this.conversationId, this.formTaskId, this.language)
         .catch((err) => {
           if (
             err instanceof ApiError &&

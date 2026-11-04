@@ -7,9 +7,9 @@ import { getOwnedConversation } from "../conversations/conversation.service";
 import { consumeVoiceTicket } from "./voice.tickets";
 import { isPcm16LeFrame, voiceProtocolMessageSchema, VOICE_PROTOCOL_VERSION } from "./voice.protocol";
 import { GnaniPrismaAdapter, type SttProvider } from "./gnani.adapter";
-import { randomUUID } from "node:crypto";
 import { HttpError } from "../../common/errors";
 import { GnaniTimbreAdapter, type TtsProvider } from "./timbre.adapter";
+import { defaultVoiceSessionRegistry, VoiceSessionRegistry, type VoiceSession } from "./voice.registry";
 
 export type VoiceTranscriptHandler = (input: {
   userId: string;
@@ -18,13 +18,11 @@ export type VoiceTranscriptHandler = (input: {
   providerSegmentId: string;
   content: string;
   language?: string;
+  formTaskId?: string;
 }) => Promise<{ response: string; assistantMessageId: string; reused: boolean }>;
 
-const MAX_ACTIVE_PER_USER = 2;
-const activeSessions = new Map<string, number>();
-
 export function clearActiveVoiceSessions(): void {
-  activeSessions.clear();
+  defaultVoiceSessionRegistry.clear();
 }
 
 function send(socket: WebSocket, messageType: string, payload: Record<string, unknown> = {}): void {
@@ -59,12 +57,18 @@ export function attachVoiceGateway(
   providerFactory: () => SttProvider = () => new GnaniPrismaAdapter(),
   transcriptHandler?: VoiceTranscriptHandler,
   ttsFactory: () => TtsProvider = () => new GnaniTimbreAdapter(),
+  registry: VoiceSessionRegistry = defaultVoiceSessionRegistry,
 ): WebSocketServer {
   const gateway = new WebSocketServer({ noServer: true, maxPayload: 4096 });
+  registry.startHeartbeat();
+
   server.on("close", () => {
+    registry.stopHeartbeat();
     for (const client of gateway.clients) client.close();
     gateway.close();
+    registry.clear();
   });
+
   server.on("upgrade", (request, socket, head) => {
     let url: URL;
     try {
@@ -89,54 +93,56 @@ export function attachVoiceGateway(
       rejectUpgrade(socket, 401, "Unauthorized", "Invalid or expired voice ticket");
       return;
     }
-    const current = activeSessions.get(identity.userId) ?? 0;
-    if (current >= MAX_ACTIVE_PER_USER) {
+
+    // Allocate concurrency capacity atomically via VoiceSessionRegistry
+    const allocation = registry.acquireSessionSlot(identity.userId, identity.conversationId, identity.formTaskId, identity.language);
+    if (!allocation.allowed) {
       console.warn(`[VoiceGateway] Upgrade rejected: max concurrent voice sessions reached for user ${identity.userId}`);
       rejectUpgrade(socket, 429, "Too Many Requests", "Max active voice sessions reached");
       return;
     }
-    activeSessions.set(identity.userId, current + 1);
+
+    const session = allocation.session;
 
     try {
       const provider = providerFactory();
       gateway.handleUpgrade(request, socket, head, (client) => {
-        gateway.emit("connection", client, request, identity, provider);
+        gateway.emit("connection", client, request, session, provider);
       });
     } catch {
-      const count = activeSessions.get(identity.userId) ?? 1;
-      if (count <= 1) activeSessions.delete(identity.userId);
-      else activeSessions.set(identity.userId, count - 1);
+      registry.releaseSession(session.sessionId, "UPGRADE_FAILED", "FAILED");
       rejectUpgrade(socket, 500, "Internal Server Error", "Speech provider initialization failed");
     }
   });
 
-  gateway.on("connection", (socket: WebSocket, _request: IncomingMessage, identity: { userId: string; conversationId: string }, provider: SttProvider) => {
+  gateway.on("connection", (socket: WebSocket, _request: IncomingMessage, session: VoiceSession, provider: SttProvider) => {
     let started = false;
     let providerReady = false;
     let closed = false;
     let audioFrameCount = 0;
     let firstFrameReceived = false;
-    const voiceSessionId = randomUUID();
+    let activeFormTaskId = session.formTaskId;
+    const voiceSessionId = session.sessionId;
     const tts = ttsFactory();
     let ttsBusy = false;
     const seenSegments = new Set<string>();
 
-    console.log(`[VoiceGateway][${voiceSessionId}] Client connected to voice gateway for conversation=${identity.conversationId}`);
+    registry.attachResources(voiceSessionId, socket, provider, tts);
 
-    const cleanup = () => {
+    console.log(`[VoiceGateway][${voiceSessionId}] Client connected to voice gateway for conversation=${session.conversationId}, formTask=${activeFormTaskId ?? 'none'}`);
+
+    const cleanup = (reason: string = "CONNECTION_CLEANUP") => {
       if (closed) return;
       closed = true;
-      try { provider.close(); } catch {}
-      try { tts.close(); } catch {}
-      const count = activeSessions.get(identity.userId) ?? 1;
-      if (count <= 1) activeSessions.delete(identity.userId); else activeSessions.set(identity.userId, count - 1);
+      registry.releaseSession(voiceSessionId, reason);
       console.log(`[VoiceGateway][${voiceSessionId}] Voice session cleaned up, totalAudioFrames=${audioFrameCount}`);
     };
 
     const fail = (code: string, message: string) => {
       console.error(`[VoiceGateway][${voiceSessionId}] Voice session failure: code=${code}, message=${message}`);
       send(socket, "ERROR", { error: errorMessage(code, message) });
-      cleanup();
+      registry.transitionState(voiceSessionId, "FAILED", code);
+      cleanup(`FAILED_${code}`);
       socket.close(1011);
     };
 
@@ -144,7 +150,7 @@ export function attachVoiceGateway(
       if (!closed) {
         console.warn(`[VoiceGateway][${voiceSessionId}] Provider disconnected unexpectedly`);
         send(socket, "ERROR", { error: errorMessage("PROVIDER_DISCONNECTED", "Speech provider disconnected") });
-        cleanup();
+        cleanup("PROVIDER_DISCONNECTED");
         socket.close();
       }
     });
@@ -172,20 +178,28 @@ export function attachVoiceGateway(
         console.log(`[VoiceGateway][${voiceSessionId}] Final transcript received: segmentId=${event.segmentId}, durationMs=${event.audioDurationMs}, language=${event.detectedLanguageCode || 'auto'}`);
         send(socket, "TRANSCRIPT", { sessionState: "READY", transcript: { text: event.text, timestamp: event.timestamp, audioDurationMs: event.audioDurationMs, segmentId: event.segmentId, segmentIndex: event.segmentIndex, latencyMs: event.latencyMs, detectedLanguageCode: event.detectedLanguageCode, utteranceId: event.utteranceId, isFinal: true } });
         if (transcriptHandler) {
+          console.log(`[VoiceGateway][${voiceSessionId}] Voice turn received active form context: taskId=${activeFormTaskId ?? 'none'}`);
           void transcriptHandler({
-            userId: identity.userId,
-            conversationId: identity.conversationId,
+            userId: session.userId,
+            conversationId: session.conversationId,
             voiceSessionId,
             providerSegmentId: event.segmentId,
             content: event.text,
-            language: event.detectedLanguageCode,
+            language: session.language || event.detectedLanguageCode,
+            formTaskId: activeFormTaskId,
           }).then((result) => {
             if (!closed) {
               console.log(`[VoiceGateway][${voiceSessionId}] Dispatched assistant response for segmentId=${event.segmentId}`);
-              send(socket, "ASSISTANT_RESPONSE", { conversationId: identity.conversationId, assistantMessageId: result.assistantMessageId, response: result.response, reused: result.reused });
+              send(socket, "ASSISTANT_RESPONSE", {
+                conversationId: session.conversationId,
+                assistantMessageId: result.assistantMessageId,
+                response: result.response,
+                reused: result.reused,
+                formActions: (result as { formActions?: unknown }).formActions,
+              });
               if (!ttsBusy) {
                 ttsBusy = true;
-                void tts.synthesize(result.response).catch((error: unknown) => {
+                void tts.synthesize(result.response, session.language).catch((error: unknown) => {
                   ttsBusy = false;
                   if (!closed) send(socket, "ERROR", { error: { code: error instanceof HttpError ? error.code : "TTS_FAILED", message: error instanceof HttpError ? error.message : "Text-to-speech failed" } });
                 });
@@ -194,10 +208,20 @@ export function attachVoiceGateway(
               }
             }
           }).catch((error: unknown) => {
-            if (!closed) send(socket, "ERROR", { error: { code: error instanceof HttpError ? error.code : "VOICE_TURN_FAILED", message: error instanceof HttpError ? error.message : "Voice turn failed" } });
+            console.error(`[VoiceGateway][${voiceSessionId}] Voice turn failed:`, error);
+            if (!closed) {
+              const code = error instanceof HttpError ? error.code : "VOICE_TURN_FAILED";
+              const message = error instanceof HttpError ? error.message : "Voice turn failed";
+              send(socket, "ERROR", { error: { code, message } });
+            }
           });
         }
       } else if (event.type === "error") {
+        const msg = (event.message || "").toLowerCase();
+        if (msg.includes("no speech segment") || msg.includes("60 second") || msg.includes("idle") || msg.includes("inactivity")) {
+          console.log(`[VoiceGateway][${voiceSessionId}] Suppressing provider idle silence notification: ${event.message}`);
+          return;
+        }
         console.error(`[VoiceGateway][${voiceSessionId}] Forwarding provider error to client: code=${event.code}, message=${event.message}`);
         fail(event.code, event.message);
       }
@@ -244,31 +268,52 @@ export function attachVoiceGateway(
       if (!message.success) { fail("INVALID_MESSAGE", "Invalid voice protocol message"); return; }
 
       if (message.data.messageType === "START") {
-        if (started || message.data.conversationId !== identity.conversationId) return fail("INVALID_SESSION", "Voice session is already started or conversation is invalid");
+        if (started || message.data.conversationId !== session.conversationId) return fail("INVALID_SESSION", "Voice session is already started or conversation is invalid");
+        if (message.data.formTaskId) {
+          activeFormTaskId = message.data.formTaskId;
+          console.log(`[VoiceGateway][${voiceSessionId}] Active form task updated from START message: ${activeFormTaskId}`);
+        }
         try {
-          const conversation = await getOwnedConversation(identity.userId, identity.conversationId);
+          const conversation = await getOwnedConversation(session.userId, session.conversationId);
           if (conversation.status !== "ACTIVE") return fail("CONVERSATION_NOT_ACTIVE", "Only active conversations can use voice sessions");
 
           console.log(`[VoiceGateway][${voiceSessionId}] STT connection attempt: connecting to speech provider`);
           send(socket, "SESSION_STATE", { sessionState: "CONNECTING" });
+          registry.transitionState(voiceSessionId, "CONNECTING", "START_REQUEST");
           await provider.connect();
           console.log(`[VoiceGateway][${voiceSessionId}] Provider connection success`);
           started = true;
+          registry.transitionState(voiceSessionId, "ACTIVE", "PROVIDER_CONNECTED");
         } catch (err: unknown) {
           console.error(`[VoiceGateway][${voiceSessionId}] Provider connection failure: ${err instanceof Error ? err.message : 'Speech provider is unavailable'}`);
           fail("PROVIDER_UNAVAILABLE", "Speech provider is unavailable");
         }
       } else if (message.data.messageType === "STOP" || message.data.messageType === "CANCEL") {
         console.log(`[VoiceGateway][${voiceSessionId}] Client requested session stop/cancel`);
-        cleanup();
-        clearTimeout(maxSessionTimer);
+        registry.transitionState(voiceSessionId, "CLOSING", "CLIENT_STOP");
         send(socket, "SESSION_CLOSED", { sessionState: "CLOSED" });
-        socket.close();
+        clearTimeout(maxSessionTimer);
+        cleanup("CLIENT_STOP");
+        try {
+          if (socket.readyState === socket.OPEN || socket.readyState === socket.CONNECTING) {
+            socket.close();
+          }
+        } catch {}
+      } else if (message.data.messageType === "UPDATE_FORM_TASK") {
+        activeFormTaskId = message.data.formTaskId ?? undefined;
+        console.log(`[VoiceGateway][${voiceSessionId}] Active form task updated dynamically: ${activeFormTaskId ?? 'none'}`);
       }
     });
 
-    socket.on("close", () => { clearTimeout(maxSessionTimer); cleanup(); });
-    socket.on("error", cleanup);
+    socket.on("close", (code, reason) => {
+      clearTimeout(maxSessionTimer);
+      cleanup(`SOCKET_CLOSED_${code}_${reason ? reason.toString() : 'none'}`);
+    });
+
+    socket.on("error", (err) => {
+      cleanup(`SOCKET_ERROR_${err.message}`);
+    });
   });
+
   return gateway;
 }

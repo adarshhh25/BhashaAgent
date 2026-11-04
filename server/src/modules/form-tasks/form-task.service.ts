@@ -133,11 +133,18 @@ export async function updateWebpage(userId: string, taskId: string, input: { url
 export async function addFields(userId: string, taskId: string, fields: Array<Record<string, unknown>>) {
   const task = await ownedTask(userId, taskId);
   if (["COMPLETED", "CANCELLED"].includes(task.status)) throw new HttpError(409, "TASK_TERMINAL", "Task is terminal");
-  const identifiers = fields.map((field) => field.fieldIdentifier as string);
-  if (new Set(identifiers).size !== identifiers.length) throw new HttpError(409, "DUPLICATE_FIELD", "Field identifiers must be unique in a batch");
+  const seen = new Set<string>();
+  const sanitizedFields = fields.map((field, idx) => {
+    let id = (field.fieldIdentifier as string) || (`field_${idx + 1}`);
+    if (seen.has(id)) {
+      id = `${id}_${idx + 1}`;
+    }
+    seen.add(id);
+    return { ...field, fieldIdentifier: id };
+  });
   return prisma.$transaction(async (transaction) => {
     const created = [];
-    for (const field of fields) {
+    for (const field of sanitizedFields) {
       created.push(await transaction.detectedField.upsert({
         where: { formTaskId_fieldIdentifier: { formTaskId: taskId, fieldIdentifier: field.fieldIdentifier as string } },
         create: { ...(field as object), formTaskId: taskId } as Prisma.DetectedFieldUncheckedCreateInput,
@@ -145,7 +152,7 @@ export async function addFields(userId: string, taskId: string, fields: Array<Re
       }));
     }
     await transaction.formTask.update({ where: { id: taskId }, data: { status: "FIELDS_DETECTED", detectedAt: new Date(), version: { increment: 1 } } });
-    await event(transaction, taskId, "FIELDS_DETECTED", task.status, "FIELDS_DETECTED", undefined, { count: fields.length });
+    await event(transaction, taskId, "FIELDS_DETECTED", task.status, "FIELDS_DETECTED", undefined, { count: sanitizedFields.length });
     return created;
   });
 }
@@ -154,8 +161,14 @@ function validateValue(field: { inputType: string; options: Prisma.JsonValue | n
   if (field.inputType.toLowerCase() === "email" && (typeof value !== "string" || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value))) throw new HttpError(400, "INVALID_FIELD_VALUE", "Invalid email value");
   if (["number", "tel"].includes(field.inputType.toLowerCase()) && typeof value !== "number" && typeof value !== "string") throw new HttpError(400, "INVALID_FIELD_VALUE", "Invalid field value");
   if (["select", "radio"].includes(field.inputType.toLowerCase()) && Array.isArray(field.options)) {
-    const options = field.options as Array<{ value?: unknown }>;
-    if (!options.some((option) => option.value === value)) throw new HttpError(400, "INVALID_FIELD_VALUE", "Value is not one of the field options");
+    const options = field.options as Array<unknown>;
+    const matches = options.some((option) => {
+      if (option && typeof option === "object" && "value" in option) {
+        return (option as { value: unknown }).value === value;
+      }
+      return String(option).toLowerCase() === String(value).toLowerCase();
+    });
+    if (!matches) throw new HttpError(400, "INVALID_FIELD_VALUE", "Value is not one of the field options");
   }
 }
 

@@ -57,6 +57,8 @@ export interface PaginationMetadata {
   limit: number;
   total: number;
   totalPages: number;
+  hasMore?: boolean;
+  nextPage?: number | null;
 }
 
 export interface ConversationListResponse {

@@ -132,10 +132,6 @@ export function MessageComposer({
           </div>
         </div>
       </div>
-
-      <p className="text-[10px] text-center text-text-placeholder">
-        Press <strong>Enter</strong> to send • <strong>Shift + Enter</strong> for a new line
-      </p>
     </div>
   );
 }

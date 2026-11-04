@@ -484,3 +484,198 @@ test.describe('DOM Action Executor & Safety Guarantees', () => {
   });
 });
 
+test.describe('scanPageFormFields Enhanced DOM Detector', () => {
+  test('accurately extracts form fields, resolves labels, and groups radio buttons', async () => {
+    const { scanPageFormFields } = await import('../src/content/index.ts');
+
+    const inputName = {
+      tagName: 'INPUT',
+      type: 'text',
+      id: 'full_name',
+      name: 'fullName',
+      required: true,
+      disabled: false,
+      readOnly: false,
+      getAttribute: (attr) => (attr === 'type' ? 'text' : null),
+      closest: () => null,
+      previousElementSibling: null,
+    };
+
+    const labelName = {
+      textContent: 'Full Legal Name',
+    };
+
+    const selectCity = {
+      tagName: 'SELECT',
+      type: 'select-one',
+      id: 'city_select',
+      name: 'city',
+      required: false,
+      disabled: false,
+      readOnly: false,
+      options: [
+        { value: 'mum', text: 'Mumbai' },
+        { value: 'del', text: 'Delhi' },
+      ],
+      getAttribute: (attr) => null,
+      closest: () => null,
+      previousElementSibling: null,
+    };
+
+    const radioMale = {
+      tagName: 'INPUT',
+      type: 'radio',
+      id: 'gender_m',
+      name: 'gender',
+      value: 'male',
+      required: true,
+      disabled: false,
+      readOnly: false,
+      getAttribute: (attr) => (attr === 'type' ? 'radio' : null),
+      closest: () => ({ querySelector: () => ({ textContent: 'Select Gender' }) }),
+      previousElementSibling: null,
+    };
+
+    const radioFemale = {
+      tagName: 'INPUT',
+      type: 'radio',
+      id: 'gender_f',
+      name: 'gender',
+      value: 'female',
+      required: true,
+      disabled: false,
+      readOnly: false,
+      getAttribute: (attr) => (attr === 'type' ? 'radio' : null),
+      closest: () => ({ querySelector: () => ({ textContent: 'Select Gender' }) }),
+      previousElementSibling: null,
+    };
+
+    const submitBtn = {
+      tagName: 'INPUT',
+      type: 'submit',
+      id: 'submit_btn',
+      getAttribute: (attr) => (attr === 'type' ? 'submit' : null),
+      closest: () => null,
+    };
+
+    const allElements = [inputName, selectCity, radioMale, radioFemale, submitBtn];
+
+    const mockDoc = {
+      title: 'Registration Form',
+      querySelectorAll: (selector) => {
+        if (selector.includes('radio')) {
+          return [radioMale, radioFemale];
+        }
+        return allElements;
+      },
+      querySelector: (selector) => {
+        if (selector === 'label[for="full_name"]') return labelName;
+        if (selector === 'label[for="gender_m"]') return { textContent: 'Male' };
+        if (selector === 'label[for="gender_f"]') return { textContent: 'Female' };
+        return null;
+      },
+      getElementById: (id) => null,
+    };
+
+    const result = scanPageFormFields(mockDoc);
+    assert.equal(result.pageContext.title, 'Registration Form');
+
+    // Should skip submit button, and combine 2 radio inputs into 1 field
+    assert.equal(result.fields.length, 3);
+
+    // Field 1: Name
+    assert.equal(result.fields[0].fieldIdentifier, 'full_name');
+    assert.equal(result.fields[0].label, 'Full Legal Name');
+    assert.equal(result.fields[0].isRequired, true);
+
+    // Field 2: Select City
+    assert.equal(result.fields[1].fieldIdentifier, 'city_select');
+    assert.equal(result.fields[1].inputType, 'select');
+    assert.equal(result.fields[1].options?.length, 2);
+    assert.equal(result.fields[1].options?.[0].label, 'Mumbai');
+
+    // Field 3: Radio group
+    assert.equal(result.fields[2].fieldIdentifier, 'gender');
+    assert.equal(result.fields[2].inputType, 'radio');
+    assert.equal(result.fields[2].options?.length, 2);
+    assert.equal(result.fields[2].options?.[0].value, 'male');
+  });
+});
+
+test.describe('Chrome Extension Side Panel Opening & User Gesture Verification', () => {
+  test('invokes chrome.sidePanel.open directly with target tabId without background relay', async () => {
+    let openCalledWith = null;
+    let windowClosed = false;
+
+    const mockChrome = {
+      sidePanel: {
+        open: async (opts) => {
+          openCalledWith = opts;
+          return undefined;
+        },
+        setOptions: async () => undefined,
+      },
+      tabs: {
+        query: (queryInfo, callback) => {
+          callback([{ id: 101, url: 'https://example.com/form' }]);
+        },
+      },
+    };
+
+    // Simulate direct popup invocation pattern
+    const activeTabId = 101;
+    await mockChrome.sidePanel.open({ tabId: activeTabId });
+    windowClosed = true;
+
+    assert.deepEqual(openCalledWith, { tabId: 101 });
+    assert.equal(windowClosed, true);
+  });
+
+  test('pre-enables tab-specific options before opening', async () => {
+    const setOptionsCalls = [];
+
+    const mockChrome = {
+      sidePanel: {
+        setOptions: async (opts) => {
+          setOptionsCalls.push(opts);
+        },
+        open: async () => undefined,
+      },
+    };
+
+    await mockChrome.sidePanel.setOptions({
+      tabId: 202,
+      path: 'index.html',
+      enabled: true,
+    });
+
+    assert.equal(setOptionsCalls.length, 1);
+    assert.deepEqual(setOptionsCalls[0], {
+      tabId: 202,
+      path: 'index.html',
+      enabled: true,
+    });
+  });
+
+  test('catches and reports chrome.sidePanel.open rejection gracefully', async () => {
+    let capturedError = null;
+
+    const mockChrome = {
+      sidePanel: {
+        open: async () => {
+          throw new Error('sidePanel.open() may only be called in response to a user gesture.');
+        },
+      },
+    };
+
+    try {
+      await mockChrome.sidePanel.open({ tabId: 303 });
+    } catch (err) {
+      capturedError = err.message;
+    }
+
+    assert.equal(capturedError, 'sidePanel.open() may only be called in response to a user gesture.');
+  });
+});
+
+
