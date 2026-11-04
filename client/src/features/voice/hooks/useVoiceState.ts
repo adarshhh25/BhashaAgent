@@ -81,14 +81,19 @@ export function useVoiceState({
               if (tab?.id && tab.url && !tab.url.startsWith('chrome://') && !tab.url.startsWith('chrome-extension://')) {
                 const actions = data.formActions!.map((fa, index) => ({
                   actionId: `voice-fill-${Date.now()}-${index}`,
-                  fieldId: fa.fieldId || fa.fieldIdentifier,
-                  fieldIdentifier: fa.fieldIdentifier,
+                  fieldId: fa.fieldIdentifier || fa.fieldId || '',
+                  fieldIdentifier: fa.fieldIdentifier || fa.fieldId || '',
+                  action: fa.actionType,
                   actionType: fa.actionType,
                   value: fa.value,
+                  expectedFieldType: '',
                 }));
+                console.log('[useVoiceState] Executing form actions on active tab:', tab.id, actions);
                 chrome.tabs.sendMessage(tab.id, {
                   type: 'EXECUTE_FILL_INSTRUCTIONS',
                   payload: { actions },
+                }).then((resp) => {
+                  console.log('[useVoiceState] Form actions execution result:', resp);
                 }).catch((err) => {
                   console.warn('[useVoiceState] Action execution relay error:', err);
                 });

@@ -20,10 +20,21 @@ interface ActiveTabContext {
 /**
  * Configure default side panel behavior on installation / startup:
  * - Do not automatically toggle side panel on toolbar action click (show popup instead)
+ * - Disable side panel by default across tabs so it only opens when explicitly requested per tab
  */
 if (typeof chrome !== 'undefined' && chrome.sidePanel) {
   chrome.sidePanel.setPanelBehavior?.({ openPanelOnActionClick: false }).catch((err) => {
     console.warn('[Background] setPanelBehavior error:', err);
+  });
+  chrome.sidePanel.setOptions?.({ enabled: false }).catch(() => {});
+}
+
+// When a new tab is created, ensure side panel is disabled for it by default
+if (typeof chrome !== 'undefined' && chrome.tabs?.onCreated) {
+  chrome.tabs.onCreated.addListener((tab) => {
+    if (tab.id && chrome.sidePanel?.setOptions) {
+      chrome.sidePanel.setOptions({ tabId: tab.id, enabled: false }).catch(() => {});
+    }
   });
 }
 

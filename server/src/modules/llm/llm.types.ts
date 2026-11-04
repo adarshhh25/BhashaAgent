@@ -2,7 +2,7 @@ export interface LLMMessage {
   role: "system" | "user" | "assistant" | "tool";
   content: string | null;
   toolCallId?: string;
-  toolCalls?: Array<{ id: string; name: string; arguments: string }>;
+  toolCalls?: Array<{ id: string; name: string; arguments: string; thoughtSignature?: string }>;
 }
 
 export interface LLMToolDefinition {
@@ -28,6 +28,7 @@ export interface LLMToolCall {
   id: string;
   name: string;
   arguments: string;
+  thoughtSignature?: string;
 }
 
 export interface LLMResponse {

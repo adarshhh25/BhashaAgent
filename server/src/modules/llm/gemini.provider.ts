@@ -11,6 +11,8 @@ interface GeminiFunctionDeclaration {
 }
 
 const quotaExhaustedModels = new Map<string, number>();
+const thoughtSignatureByCallId = new Map<string, string>();
+const thoughtSignatureByName = new Map<string, string>();
 
 export class GeminiLLMProvider implements LLMProvider {
   private client: GoogleGenAI | null = null;
@@ -56,12 +58,17 @@ export class GeminiLLMProvider implements LLMProvider {
             } catch {
               args = { raw: tc.arguments };
             }
-            parts.push({
+            const partObj: Record<string, unknown> = {
               functionCall: {
                 name: tc.name,
                 args,
               },
-            });
+            };
+            const sig = tc.thoughtSignature || thoughtSignatureByCallId.get(tc.id) || thoughtSignatureByName.get(tc.name);
+            if (sig) {
+              partObj.thoughtSignature = sig;
+            }
+            parts.push(partObj);
           }
         }
         if (parts.length > 0) {
@@ -124,6 +131,7 @@ export class GeminiLLMProvider implements LLMProvider {
 
     const rawModelsToTry = [
       primaryModel,
+      "gemini-flash-lite-latest",
       "gemini-3.5-flash",
       fallbackModel,
     ].filter((m, i, arr) => arr.indexOf(m) === i && Boolean(m));
@@ -169,35 +177,48 @@ export class GeminiLLMProvider implements LLMProvider {
 
             clearTimeout(timer);
 
-            // Process tool calls if any (check both SDK helper and candidate parts)
+            // Process tool calls if any (check candidate parts for thoughtSignature preservation)
             const toolCalls: LLMToolCall[] = [];
-            if (response.functionCalls && Array.isArray(response.functionCalls) && response.functionCalls.length > 0) {
+            if (response.candidates?.[0]?.content?.parts) {
+              let idx = 0;
+              for (const part of response.candidates[0].content.parts as Array<Record<string, any>>) {
+                if (part.functionCall) {
+                  const callId = part.functionCall.id || `call_${Date.now()}_${idx++}`;
+                  const toolCall: LLMToolCall = {
+                    id: callId,
+                    name: part.functionCall.name ?? "unknown_tool",
+                    arguments: JSON.stringify(part.functionCall.args ?? {}),
+                  };
+                  if (part.thoughtSignature) {
+                    toolCall.thoughtSignature = part.thoughtSignature;
+                    thoughtSignatureByCallId.set(callId, part.thoughtSignature);
+                    thoughtSignatureByName.set(toolCall.name, part.thoughtSignature);
+                  }
+                  toolCalls.push(toolCall);
+                }
+              }
+            } else if (response.functionCalls && Array.isArray(response.functionCalls) && response.functionCalls.length > 0) {
               for (let i = 0; i < response.functionCalls.length; i += 1) {
                 const fc = response.functionCalls[i];
+                const callId = `call_${Date.now()}_${i}`;
                 toolCalls.push({
-                  id: `call_${Date.now()}_${i}`,
+                  id: callId,
                   name: fc.name ?? "unknown_tool",
                   arguments: JSON.stringify(fc.args ?? {}),
                 });
               }
-            } else if (response.candidates?.[0]?.content?.parts) {
-              let idx = 0;
-              for (const part of response.candidates[0].content.parts as Array<Record<string, any>>) {
-                if (part.functionCall) {
-                  toolCalls.push({
-                    id: `call_${Date.now()}_${idx++}`,
-                    name: part.functionCall.name ?? "unknown_tool",
-                    arguments: JSON.stringify(part.functionCall.args ?? {}),
-                  });
-                }
-              }
             }
 
-            // Process text content
-            let contentText = response.text ?? "";
+            // Process text content safely without throwing if model returned only functionCalls
+            let contentText = "";
+            try {
+              contentText = response.text ?? "";
+            } catch {
+              // Non-text parts exist; extract from parts
+            }
             if (!contentText && response.candidates?.[0]?.content?.parts) {
               const textParts = (response.candidates[0].content.parts as Array<Record<string, any>>)
-                .filter((p) => typeof p.text === "string")
+                .filter((p) => typeof p.text === "string" && !p.thought)
                 .map((p) => p.text);
               if (textParts.length > 0) {
                 contentText = textParts.join("\n").trim();
@@ -248,7 +269,7 @@ export class GeminiLLMProvider implements LLMProvider {
 
           const errMsg = String(error?.message ?? "");
           const isRateLimit = error?.status === 429 || errMsg.includes("429") || errMsg.includes("RESOURCE_EXHAUSTED") || errMsg.includes("Quota exceeded");
-          const isDailyQuota = errMsg.includes("per day") || errMsg.includes("PerDay") || errMsg.includes("limit: 20");
+          const isDailyQuota = isRateLimit && (errMsg.includes("per day") || errMsg.includes("PerDay") || errMsg.includes("limit: 20") || errMsg.includes("free_tier_requests"));
           const isHighDemand = error?.status === 503 || errMsg.includes("503") || errMsg.includes("high demand") || errMsg.includes("UNAVAILABLE");
           const isAuthError = error?.status === 401 || error?.status === 403 || errMsg.includes("API_KEY_INVALID");
 
@@ -288,12 +309,13 @@ export class GeminiLLMProvider implements LLMProvider {
           // Other transient errors (500, 503)
           if (attempt < maxRetries) {
             const backoff = 1000 * Math.pow(2, attempt);
-            console.warn(`[GeminiLLMProvider] Transient error on ${currentModel}. Retrying in ${backoff}ms...`);
+            console.warn(`[GeminiLLMProvider] Transient error on ${currentModel}: ${errMsg.slice(0, 150)}. Retrying in ${backoff}ms...`);
             await new Promise((resolve) => setTimeout(resolve, backoff));
             continue;
           }
 
           // Break to try next model in modelsToTry
+          console.warn(`[GeminiLLMProvider] Error on ${currentModel}: ${errMsg.slice(0, 200)}. Trying fallback...`);
           break;
         }
       }

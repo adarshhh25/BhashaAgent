@@ -184,7 +184,13 @@ export function scanPageFormFields(doc: Document = document): {
       continue;
     }
 
-    const fieldIdentifier = id || name || `field_${orderIndex}`;
+    let fieldIdentifier = id || '';
+    if (!fieldIdentifier && type === 'checkbox') {
+      const val = 'value' in el ? (el as HTMLInputElement).value : '';
+      fieldIdentifier = name && val ? `${name}_${val}` : (name || `field_${orderIndex}`);
+    } else if (!fieldIdentifier) {
+      fieldIdentifier = name || `field_${orderIndex}`;
+    }
     const label = resolveFieldLabel(el, id, name, placeholder) || `Field ${orderIndex}`;
 
     // Extract options for selects
@@ -257,7 +263,7 @@ if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
       return false;
     }
 
-    if (message?.type === 'DETECT_PAGE_FIELDS') {
+    if (message?.type === 'DETECT_PAGE_FIELDS' || message?.type === 'DISCOVER_FORM_CONTEXT') {
       try {
         const detected = scanPageFormFields();
         sendResponse({
