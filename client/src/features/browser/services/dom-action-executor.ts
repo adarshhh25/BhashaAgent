@@ -74,7 +74,7 @@ export function resolveTargetElement(
   }
 
   // Strategy 4: Compound identifier resolution (e.g., "topping_bacon", "topping:cheese")
-  const splitMatch = fieldIdentifier.match(/^([a-zA-Z0-9_-]+)[_:](.+)$/);
+  const splitMatch = fieldIdentifier.match(/^([-a-zA-Z0-9_]+)[_:](.+)$/);
   if (splitMatch && splitMatch[1] && splitMatch[2]) {
     const groupName = splitMatch[1];
     const valPart = splitMatch[2].toLowerCase();
@@ -321,8 +321,13 @@ export async function executeSingleAction(
         }
       }
 
-      targetRadio.focus();
-      targetRadio.checked = true;
+      if (typeof targetRadio.focus === "function") targetRadio.focus();
+      if (!targetRadio.checked) {
+        if (typeof targetRadio.click === "function") targetRadio.click();
+      }
+      if (!targetRadio.checked) {
+        targetRadio.checked = true;
+      }
       dispatchInputEvents(targetRadio);
 
       if (targetRadio.checked) {
@@ -352,8 +357,13 @@ export async function executeSingleAction(
         // If checkbox was targeted with SET_VALUE (e.g. true/false)
         if (isInputElement(element) && element.type?.toLowerCase() === 'checkbox') {
           const desired = action.value === true || action.value === 'true' || action.value === 1 || String(action.value).toLowerCase() === 'on';
-          element.focus();
-          element.checked = desired;
+          if (typeof element.focus === "function") element.focus();
+          if (element.checked !== desired) {
+            if (typeof element.click === "function") element.click();
+          }
+          if (element.checked !== desired) {
+            element.checked = desired;
+          }
           dispatchInputEvents(element);
           return {
             fieldId: action.fieldId,
@@ -381,7 +391,7 @@ export async function executeSingleAction(
             ? JSON.stringify(action.value)
             : String(action.value ?? '');
 
-        element.focus();
+        if (typeof element.focus === "function") element.focus();
         setNativeValue(element, stringValue);
         dispatchInputEvents(element);
 
@@ -490,8 +500,13 @@ export async function executeSingleAction(
         }
 
         const desiredState = rawAction === 'CHECK';
-        element.focus();
-        element.checked = desiredState;
+        if (typeof element.focus === "function") element.focus();
+        if (element.checked !== desiredState) {
+          if (typeof element.click === "function") element.click();
+        }
+        if (element.checked !== desiredState) {
+          element.checked = desiredState;
+        }
         dispatchInputEvents(element);
 
         // Readback verification
@@ -538,4 +553,32 @@ export async function executeSingleAction(
       executedAt: timestamp,
     };
   }
+}
+
+
+/**
+ * Execute multiple Phase 9 BrowserFillActions sequentially.
+ */
+export async function executeInstructionsOnPage(
+  actions: BrowserFillAction[],
+  doc: Document = typeof document !== 'undefined' ? document : (null as unknown as Document),
+): Promise<{
+  overallStatus: 'COMPLETED' | 'PARTIAL' | 'FAILED';
+  results: ActionResultItem[];
+}> {
+  const results: ActionResultItem[] = [];
+  for (const action of actions) {
+    const res = await executeSingleAction(doc, action);
+    results.push(res);
+  }
+  const successCount = results.filter((r) => r.status === 'SUCCESS').length;
+  let overallStatus: 'COMPLETED' | 'PARTIAL' | 'FAILED';
+  if (successCount === results.length && results.length > 0) {
+    overallStatus = 'COMPLETED';
+  } else if (successCount > 0) {
+    overallStatus = 'PARTIAL';
+  } else {
+    overallStatus = 'FAILED';
+  }
+  return { overallStatus, results };
 }

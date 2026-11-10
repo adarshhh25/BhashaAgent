@@ -185,6 +185,23 @@ export interface BuildAgentContextInput {
   };
 }
 
+export type TaskResolutionFailureCategory =
+  | "RESOLVED"
+  | "NOT_REQUESTED"
+  | "AMBIGUOUS"
+  | "TASK_NOT_FOUND"
+  | "TASK_OWNERSHIP_MISMATCH"
+  | "TASK_CONVERSATION_MISMATCH"
+  | "TASK_ARCHIVED_OR_DELETED"
+  | "STALE_TAB_CONTEXT";
+
+export interface TaskResolutionDiagnostic {
+  category: TaskResolutionFailureCategory;
+  requestedTaskId?: string;
+  resolvedTaskId?: string;
+  reason?: string;
+}
+
 export interface BuildAgentContextResult {
   success: true;
   context: AgentContext;
@@ -192,5 +209,6 @@ export interface BuildAgentContextResult {
     status: "resolved" | "not_requested" | "ambiguous";
     selectedTaskId?: string;
     candidateTaskIds?: string[];
+    diagnostic?: TaskResolutionDiagnostic;
   };
 }

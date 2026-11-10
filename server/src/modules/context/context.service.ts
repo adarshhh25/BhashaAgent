@@ -4,11 +4,13 @@ import { getUser } from "../users/users.service";
 import { getOwnedConversation } from "../conversations/conversation.service";
 import { getConversationContext, getOwnedMessage } from "../conversations/context.service";
 import { getRelevantMemories } from "../memories/memory.service";
+import { prisma } from "../../config/database";
+import type { FormTaskStatus } from "@prisma/client";
 import { listTasks, getTask, getTaskVersion } from "../form-tasks/form-task.service";
 import type {
   AgentContext, BuildAgentContextInput, BuildAgentContextResult, ContextCorrection,
   ContextDetectedField, ContextFieldValue, ContextMessage, ContextProfileFact,
-  ContextSourceReference, MissingInformation, WebpageContext,
+  ContextSourceReference, MissingInformation, WebpageContext, TaskResolutionDiagnostic,
 } from "./context.types";
 
 const DEFAULT_RECENT = 20;
@@ -76,28 +78,198 @@ function relevantOlder(messages: ContextMessage[], currentContent: string, limit
     .map((item) => item.message);
 }
 
-async function resolveTask(userId: string, conversationId: string, taskId?: string) {
+function maskId(id?: string): string {
+  if (!id) return "none";
+  if (id.length <= 8) return id;
+  return `${id.slice(0, 4)}...${id.slice(-4)}`;
+}
+
+async function resolveTask(userId: string, conversationId: string, taskId?: string): Promise<{
+  task: Awaited<ReturnType<typeof getTask>> | undefined;
+  resolution: {
+    status: "resolved" | "not_requested" | "ambiguous";
+    selectedTaskId?: string;
+    candidateTaskIds?: string[];
+    diagnostic?: TaskResolutionDiagnostic;
+  };
+}> {
   if (taskId) {
-    const result = await getTask(userId, taskId);
-    if (result.task.conversationId !== conversationId) {
-      throw new HttpError(404, "FORM_TASK_NOT_FOUND", "Form task not found");
+    const rawTask = await prisma.formTask.findUnique({
+      where: { id: taskId },
+    });
+
+    if (!rawTask) {
+      console.warn(`[ContextService] Requested task ${maskId(taskId)} not found in database for user ${maskId(userId)}, conversation ${maskId(conversationId)}`);
+      // Try to recover active task for current conversation
+      const activeForConv = await prisma.formTask.findFirst({
+        where: {
+          conversationId,
+          userId,
+          status: { in: ACTIVE_TASK_STATUSES as unknown as FormTaskStatus[] },
+        },
+        orderBy: { updatedAt: "desc" },
+      });
+
+      if (activeForConv) {
+        console.log(`[ContextService] Recovered active task ${maskId(activeForConv.id)} for conversation ${maskId(conversationId)} (requested ${maskId(taskId)} not found)`);
+        const task = await getTask(userId, activeForConv.id);
+        return {
+          task,
+          resolution: {
+            status: "resolved",
+            selectedTaskId: activeForConv.id,
+            diagnostic: {
+              category: "STALE_TAB_CONTEXT",
+              requestedTaskId: taskId,
+              resolvedTaskId: activeForConv.id,
+              reason: "Requested task not found; recovered active task for current conversation",
+            },
+          },
+        };
+      }
+
+      return {
+        task: undefined,
+        resolution: {
+          status: "not_requested",
+          diagnostic: {
+            category: "TASK_NOT_FOUND",
+            requestedTaskId: taskId,
+            reason: "Requested task does not exist in database",
+          },
+        },
+      };
     }
-    return { task: result, resolution: { status: "resolved" as const, selectedTaskId: taskId } };
+
+    // Strict ownership validation: task belongs to another user
+    if (rawTask.userId !== userId) {
+      console.error(`[ContextService] Security alert: Task ${maskId(taskId)} belongs to user ${maskId(rawTask.userId)}, requested by ${maskId(userId)}`);
+      return {
+        task: undefined,
+        resolution: {
+          status: "not_requested",
+          diagnostic: {
+            category: "TASK_OWNERSHIP_MISMATCH",
+            requestedTaskId: taskId,
+            reason: "Task belongs to a different user",
+          },
+        },
+      };
+    }
+
+    // Conversation match validation: task belongs to another conversation
+    if (rawTask.conversationId !== conversationId) {
+      console.warn(`[ContextService] Task ${maskId(taskId)} belongs to conversation ${maskId(rawTask.conversationId)}, current is ${maskId(conversationId)}`);
+      // Check if current conversation has an active task
+      const activeForConv = await prisma.formTask.findFirst({
+        where: {
+          conversationId,
+          userId,
+          status: { in: ACTIVE_TASK_STATUSES as unknown as FormTaskStatus[] },
+        },
+        orderBy: { updatedAt: "desc" },
+      });
+
+      if (activeForConv) {
+        console.log(`[ContextService] Recovered active task ${maskId(activeForConv.id)} for conversation ${maskId(conversationId)} (foreign conversation task requested: ${maskId(taskId)})`);
+        const task = await getTask(userId, activeForConv.id);
+        return {
+          task,
+          resolution: {
+            status: "resolved",
+            selectedTaskId: activeForConv.id,
+            diagnostic: {
+              category: "STALE_TAB_CONTEXT",
+              requestedTaskId: taskId,
+              resolvedTaskId: activeForConv.id,
+              reason: "Requested task belongs to another conversation; recovered active task for current conversation",
+            },
+          },
+        };
+      }
+
+      return {
+        task: undefined,
+        resolution: {
+          status: "not_requested",
+          diagnostic: {
+            category: "TASK_CONVERSATION_MISMATCH",
+            requestedTaskId: taskId,
+            reason: "Task belongs to another conversation",
+          },
+        },
+      };
+    }
+
+    // Check if task is archived or deleted (terminal status)
+    if (rawTask.status === "COMPLETED" || rawTask.status === "CANCELLED") {
+      console.log(`[ContextService] Task ${maskId(taskId)} is in terminal status ${rawTask.status}`);
+      return {
+        task: undefined,
+        resolution: {
+          status: "not_requested",
+          diagnostic: {
+            category: "TASK_ARCHIVED_OR_DELETED",
+            requestedTaskId: taskId,
+            reason: `Task is in terminal status: ${rawTask.status}`,
+          },
+        },
+      };
+    }
+
+    // Valid task belonging to current user and conversation
+    const task = await getTask(userId, taskId);
+    return {
+      task,
+      resolution: {
+        status: "resolved",
+        selectedTaskId: taskId,
+        diagnostic: {
+          category: "RESOLVED",
+          requestedTaskId: taskId,
+          resolvedTaskId: taskId,
+        },
+      },
+    };
   }
+
+  // No taskId requested: query active tasks for current conversation
   const listed = await listTasks(userId, { page: 1, limit: 50, conversationId });
   const candidates = listed.tasks.filter((task) =>
     (ACTIVE_TASK_STATUSES as readonly string[]).includes(task.status),
   );
-  if (candidates.length === 0) return { task: undefined, resolution: { status: "not_requested" as const } };
+
+  if (candidates.length === 0) {
+    return {
+      task: undefined,
+      resolution: {
+        status: "not_requested",
+        diagnostic: { category: "NOT_REQUESTED" },
+      },
+    };
+  }
+
   if (candidates.length > 1) {
     return {
       task: undefined,
-      resolution: { status: "ambiguous" as const, candidateTaskIds: candidates.map((task) => task.id).sort() },
+      resolution: {
+        status: "ambiguous",
+        candidateTaskIds: candidates.map((task) => task.id).sort(),
+        diagnostic: { category: "AMBIGUOUS" },
+      },
     };
   }
+
   return {
     task: await getTask(userId, candidates[0].id),
-    resolution: { status: "resolved" as const, selectedTaskId: candidates[0].id },
+    resolution: {
+      status: "resolved",
+      selectedTaskId: candidates[0].id,
+      diagnostic: {
+        category: "RESOLVED",
+        resolvedTaskId: candidates[0].id,
+      },
+    },
   };
 }
 
@@ -292,6 +464,12 @@ export async function buildAgentContext(input: BuildAgentContextInput): Promise<
   const warnings = taskResolution.resolution.status === "ambiguous"
     ? [{ code: "AMBIGUOUS_FORM_TASK", message: "More than one active form task could match this conversation" }]
     : [];
+  if (taskResolution.resolution.diagnostic?.category && ["TASK_NOT_FOUND", "TASK_CONVERSATION_MISMATCH", "TASK_OWNERSHIP_MISMATCH", "TASK_ARCHIVED_OR_DELETED"].includes(taskResolution.resolution.diagnostic.category)) {
+    warnings.push({
+      code: taskResolution.resolution.diagnostic.category,
+      message: taskResolution.resolution.diagnostic.reason || `Task resolution issue: ${taskResolution.resolution.diagnostic.category}`,
+    });
+  }
   const context: AgentContext = {
     schemaVersion: "1.0",
     request: { requestId, createdAt: now.toISOString(), currentUserMessage: currentMessage },

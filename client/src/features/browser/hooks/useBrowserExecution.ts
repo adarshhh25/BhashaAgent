@@ -10,7 +10,7 @@
 
 import { useState, useCallback } from 'react';
 import { browserService } from '../services/browser.service';
-import { executeInstructionsOnPage } from '../../../content';
+import { executeInstructionsOnPage } from '../services/dom-action-executor';
 import {
   BROWSER_PROTOCOL_VERSION,
   type BrowserExecution,

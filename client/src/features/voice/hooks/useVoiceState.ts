@@ -77,7 +77,12 @@ export function useVoiceState({
         // Execute browser actions in active Chrome tab if provided
         if (data.formActions && data.formActions.length > 0) {
           if (typeof chrome !== 'undefined' && chrome.tabs?.query) {
-            chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
+            chrome.tabs.query({ active: true, currentWindow: true }).then(async (tabs) => {
+              let tab = tabs[0];
+              if (!tab || !tab.url) {
+                const lastTabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+                tab = lastTabs[0];
+              }
               if (tab?.id && tab.url && !tab.url.startsWith('chrome://') && !tab.url.startsWith('chrome-extension://')) {
                 const actions = data.formActions!.map((fa, index) => ({
                   actionId: `voice-fill-${Date.now()}-${index}`,
@@ -89,14 +94,152 @@ export function useVoiceState({
                   expectedFieldType: '',
                 }));
                 console.log('[useVoiceState] Executing form actions on active tab:', tab.id, actions);
-                chrome.tabs.sendMessage(tab.id, {
+                const messagePayload = {
                   type: 'EXECUTE_FILL_INSTRUCTIONS',
                   payload: { actions },
-                }).then((resp) => {
-                  console.log('[useVoiceState] Form actions execution result:', resp);
-                }).catch((err) => {
-                  console.warn('[useVoiceState] Action execution relay error:', err);
-                });
+                };
+
+                let executedViaMessage = false;
+                try {
+                  const resp = await chrome.tabs.sendMessage(tab.id, messagePayload);
+                  if (resp && resp.success !== false) {
+                    executedViaMessage = true;
+                    console.log('[useVoiceState] Form actions execution result via sendMessage:', resp);
+                  }
+                } catch {
+                  // If receiving end does not exist, inject content script dynamically and retry
+                  try {
+                    if (chrome.scripting?.executeScript) {
+                      await chrome.scripting.executeScript({
+                        target: { tabId: tab.id },
+                        files: ['content.js'],
+                      });
+                      await new Promise((r) => setTimeout(r, 100));
+                      const retryResp = await chrome.tabs.sendMessage(tab.id, messagePayload);
+                      if (retryResp && retryResp.success !== false) {
+                        executedViaMessage = true;
+                        console.log('[useVoiceState] Retry after script injection result:', retryResp);
+                      }
+                    }
+                  } catch (injectErr) {
+                    console.warn('[useVoiceState] Failed relaying actions to content script:', injectErr);
+                  }
+                }
+
+                // Bulletproof direct DOM execution fallback: If content script message did not succeed, execute DOM actions directly via scripting API
+                if (!executedViaMessage && chrome.scripting?.executeScript) {
+                  try {
+                    console.log('[useVoiceState] Falling back to direct DOM scripting execution for actions:', actions);
+                    await chrome.scripting.executeScript({
+                      target: { tabId: tab.id },
+                      func: (actionList: typeof actions) => {
+                        for (const act of actionList) {
+                          const targetId = act.fieldIdentifier || act.fieldId || '';
+                          const actType = (act.action || act.actionType || 'SET_VALUE').toUpperCase();
+                          const val = act.value;
+
+                          let el: HTMLElement | null = null;
+                          if (targetId) {
+                            el = document.getElementById(targetId) || document.querySelector(`[name="${targetId}"]`) || document.querySelector(`[data-field-id="${targetId}"]`);
+                          }
+
+                          if (!el && targetId) {
+                            const match = targetId.match(/^([-a-zA-Z0-9_]+)[_:](.+)$/);
+                            if (match && match[1] && match[2]) {
+                              const group = match[1];
+                              const part = match[2].toLowerCase();
+                              const groupInputs = Array.from(document.querySelectorAll<HTMLInputElement>(`input[name="${group}"]`));
+                              for (const g of groupInputs) {
+                                if (g.value.toLowerCase() === part || g.closest('label')?.textContent?.trim().toLowerCase() === part) {
+                                  el = g;
+                                  break;
+                                }
+                              }
+                            }
+                          }
+
+                          if (!el && targetId) {
+                            const lower = targetId.toLowerCase();
+                            const all = Array.from(document.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>('input, select, textarea'));
+                            for (const candidate of all) {
+                              if (candidate.name && candidate.name.toLowerCase() === lower) { el = candidate; break; }
+                              if (candidate.value && candidate.value.toLowerCase() === lower) { el = candidate; break; }
+                              const lbl = candidate.closest('label')?.textContent?.trim().toLowerCase();
+                              if (lbl && (lbl === lower || lbl.includes(lower) || lower.includes(lbl))) { el = candidate; break; }
+                            }
+                          }
+
+                          if (!el) {
+                            console.warn('[directDOM] Could not find element for:', targetId);
+                            continue;
+                          }
+
+                          el.focus();
+                          const tag = el.tagName.toLowerCase();
+                          const inputType = ('type' in el && typeof el.type === 'string') ? el.type.toLowerCase() : tag;
+
+                          if (inputType === 'checkbox') {
+                            const chk = el as HTMLInputElement;
+                            const desired = actType === 'CHECK' || (actType === 'SET_VALUE' && (val === true || val === 'true' || val === 1 || String(val).toLowerCase() === 'on'));
+                            if (chk.checked !== desired) {
+                              chk.click();
+                            }
+                            if (chk.checked !== desired) {
+                              chk.checked = desired;
+                            }
+                            chk.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+                            chk.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+                          } else if (inputType === 'radio') {
+                            const rad = el as HTMLInputElement;
+                            let targetRadio = rad;
+                            const targetVal = String(val ?? '').trim().toLowerCase();
+                            if (rad.name && targetVal) {
+                              const group = Array.from(document.querySelectorAll<HTMLInputElement>(`input[type="radio"][name="${rad.name}"]`));
+                              const found = group.find((r) => r.value.trim().toLowerCase() === targetVal || r.closest('label')?.textContent?.trim().toLowerCase() === targetVal);
+                              if (found) targetRadio = found;
+                            }
+                            targetRadio.focus();
+                            if (!targetRadio.checked) targetRadio.click();
+                            if (!targetRadio.checked) targetRadio.checked = true;
+                            targetRadio.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+                            targetRadio.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+                          } else if (tag === 'select') {
+                            const sel = el as HTMLSelectElement;
+                            const targetVal = String(val ?? '').trim().toLowerCase();
+                            for (let i = 0; i < sel.options.length; i++) {
+                              const opt = sel.options[i];
+                              if (opt && (opt.value.toLowerCase() === targetVal || opt.text.trim().toLowerCase() === targetVal)) {
+                                sel.selectedIndex = i;
+                                break;
+                              }
+                            }
+                            sel.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+                          } else {
+                            const inp = el as HTMLInputElement | HTMLTextAreaElement;
+                            const strVal = typeof val === 'object' && val !== null ? JSON.stringify(val) : String(val ?? '');
+                            try {
+                              const proto = tag === 'textarea' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+                              const desc = Object.getOwnPropertyDescriptor(proto, 'value');
+                              if (desc?.set) {
+                                desc.set.call(inp, strVal);
+                              } else {
+                                inp.value = strVal;
+                              }
+                            } catch {
+                              inp.value = strVal;
+                            }
+                            inp.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+                            inp.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+                          }
+                        }
+                      },
+                      args: [actions],
+                    });
+                    console.log('[useVoiceState] Direct DOM scripting execution completed successfully');
+                  } catch (directExecErr) {
+                    console.error('[useVoiceState] Direct DOM execution failed:', directExecErr);
+                  }
+                }
               }
             }).catch(() => {});
           }

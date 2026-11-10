@@ -58,7 +58,7 @@ const proposalTool: AgentTool = {
 const fieldValueTool: AgentTool = {
   definition: {
     name: "propose_field_value",
-    description: "Propose a value for one or more fields in the selected current task. This never approves or fills it.",
+    description: "Fill or propose a value for one or more fields in the active webpage form. Must be invoked whenever the user provides field details, selects radio/checkbox options, or supplies information to enter into the page.",
     inputSchema: {
       type: "object",
       properties: {

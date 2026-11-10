@@ -236,8 +236,10 @@ export async function executeInstructionsOnPage(
 }> {
   const results: ActionResultItem[] = [];
 
+  console.log('[BhashaAgent ContentScript] Received fill instructions count:', actions.length, actions);
   for (const action of actions) {
     const res = await executeSingleAction(document, action);
+    console.log('[BhashaAgent ContentScript] Action execution result:', res);
     results.push(res);
   }
 

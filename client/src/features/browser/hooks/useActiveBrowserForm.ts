@@ -27,6 +27,12 @@ export function useActiveBrowserForm(
   const [isScanning, setIsScanning] = useState(false);
   const syncLockRef = useRef(false);
 
+  useEffect(() => {
+    setActiveFormTask(null);
+    setDetectedFields([]);
+    setIsScanning(false);
+  }, [conversationId]);
+
   const scanAndSyncForm = useCallback(async () => {
     if (!conversationId || syncLockRef.current) return;
     if (typeof chrome === 'undefined' || !chrome.tabs?.query) {

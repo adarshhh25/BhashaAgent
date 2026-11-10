@@ -7,7 +7,7 @@
  * Run via: npm run build:extension
  */
 
-import { copyFileSync, cpSync, existsSync, mkdirSync } from 'node:fs';
+import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -45,6 +45,16 @@ const workletDest = resolve(dist, 'pcm-processor.js');
 if (existsSync(workletSrc)) {
   copyFileSync(workletSrc, workletDest);
   console.log('✓ Copied pcm-processor.js');
+}
+
+// Clean ES exports from content.js for Chrome classic content script compatibility
+const contentJsPath = resolve(dist, 'content.js');
+if (existsSync(contentJsPath)) {
+  let contentJs = readFileSync(contentJsPath, 'utf8');
+  contentJs = contentJs.replace(/export\s*\{[^}]*\}\s*;?/g, '');
+  contentJs = contentJs.replace(/export\s+default\s+[^;]+;?/g, '');
+  writeFileSync(contentJsPath, contentJs, 'utf8');
+  console.log('✓ Cleaned ES exports from content.js for Chrome classic content script compatibility');
 }
 
 console.log('\n✓ Extension build ready at: dist/');

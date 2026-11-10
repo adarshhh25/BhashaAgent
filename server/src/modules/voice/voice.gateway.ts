@@ -189,7 +189,8 @@ export function attachVoiceGateway(
             formTaskId: activeFormTaskId,
           }).then((result) => {
             if (!closed) {
-              console.log(`[VoiceGateway][${voiceSessionId}] Dispatched assistant response for segmentId=${event.segmentId}`);
+              const actionsCount = Array.isArray((result as any).formActions) ? (result as any).formActions.length : 0;
+              console.log(`[VoiceGateway][${voiceSessionId}] Dispatched assistant response for segmentId=${event.segmentId}, formActionsCount=${actionsCount}`);
               send(socket, "ASSISTANT_RESPONSE", {
                 conversationId: session.conversationId,
                 assistantMessageId: result.assistantMessageId,

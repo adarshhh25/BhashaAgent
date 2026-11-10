@@ -135,9 +135,11 @@ export async function orchestrate(
           throw new HttpError(400, "INVALID_TOOL_ARGUMENTS", "The requested operation had invalid arguments");
         }
         const data = await tool.execute(userId, context, argumentsValue);
+        console.log(`[AgentOrchestrator] Executed tool ${call.name} successfully:`, data);
         toolResults.push({ toolCallId: call.id, name: call.name, success: true, data });
         messages.push({ role: "tool", toolCallId: call.id, content: JSON.stringify({ success: true, data }) });
-      } catch {
+      } catch (toolExecErr) {
+        console.warn(`[AgentOrchestrator] Failed executing tool ${call.name}:`, toolExecErr);
         toolResults.push({ toolCallId: call.id, name: call.name, success: false });
         messages.push({ role: "tool", toolCallId: call.id, content: JSON.stringify({ success: false }) });
       }
