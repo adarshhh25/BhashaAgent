@@ -21,6 +21,7 @@ export interface AgentLLMOutput {
 export interface AgentTurnResult {
   response: string;
   intent: AgentLLMOutput["intent"];
+  language?: AgentLLMOutput["language"];
   decision: AgentLLMOutput["decision"];
   context: AgentContext;
   toolResults: Array<{ toolCallId: string; name: string; success: boolean; data?: unknown }>;

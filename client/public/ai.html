@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BhashaAgent Voice Orb – Reference</title>
+<style>
+  :root{
+    --forest-core:#102A24;
+    --primary-green:#17483A;
+    --sage:#8FAF9B;
+    --mint:#DCE7DC;
+    --ivory:#F7F6F1;
+    --white:#FFFFFF;
+    --voice-glow-outer:rgba(143,175,155,0.35);
+    --voice-glow-ambient:rgba(220,231,220,0.55);
+    --voice-glow-active:rgba(143,175,155,0.55);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{background:var(--ivory);color:var(--primary-green);font-family:system-ui,-apple-system,"Segoe UI",sans-serif;overflow-x:hidden}
+
+  .screen{
+    position:relative;min-height:100%;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;
+    gap:24px;padding:24px;
+  }
+  /* Background illumination: only during active voice interaction */
+  .screen::before{
+    content:"";position:absolute;inset:0;pointer-events:none;opacity:0;
+    background:radial-gradient(circle at center,
+      rgba(220,231,220,0.55) 0%,
+      rgba(220,231,220,0.25) 35%,
+      #F7F6F1 75%);
+    transition:opacity 1.2s ease;
+  }
+  .screen[data-visual="active"]::before{opacity:1}
+
+  .stage{position:relative;z-index:1;width:clamp(220px,62vw,340px);aspect-ratio:1}
+
+  .orb{
+    all:unset;display:block;width:100%;height:100%;
+    border-radius:50%;cursor:pointer;position:relative;
+  }
+  .orb:focus-visible{outline:2px solid var(--primary-green);outline-offset:8px}
+  .orb:disabled{cursor:default}
+  .orb canvas{width:100%;height:100%;display:block}
+
+  /* Soft outer sage glow behind the orb */
+  .glow{
+    position:absolute;inset:-12%;border-radius:50%;pointer-events:none;
+    background:radial-gradient(circle,var(--voice-glow-outer) 0%,transparent 65%);
+    opacity:0.45;transition:opacity 0.8s ease;
+  }
+  .screen[data-visual="active"] .glow{opacity:1}
+  .screen[data-visual="processing"] .glow{opacity:0.75}
+
+  .hint{
+    position:relative;z-index:1;margin:0;min-height:1.4em;
+    font-size:1rem;letter-spacing:0.02em;
+    opacity:0;transition:opacity 0.4s ease;
+  }
+  .screen[data-visual="idle"] .hint{opacity:1}
+
+  /* Reference-only controls. Not part of the production screen. */
+  .demo{position:relative;z-index:1;display:flex;flex-wrap:wrap;gap:8px;justify-content:center;max-width:420px}
+  .demo button{
+    font:inherit;font-size:0.8rem;padding:6px 12px;border-radius:999px;
+    border:1px solid var(--sage);background:transparent;color:var(--primary-green);cursor:pointer;
+  }
+  .demo button[aria-pressed="true"]{background:var(--primary-green);color:var(--white)}
+  .demo button:focus-visible{outline:2px solid var(--primary-green);outline-offset:2px}
+
+  @media (prefers-reduced-motion: reduce){
+    .screen::before,.glow,.hint{transition:none}
+  }
+</style>
+</head>
+<body>
+<main class="screen" id="screen" data-visual="idle">
+  <div class="stage">
+    <button class="orb" id="orb" type="button" aria-label="Start voice conversation">
+      <span class="glow" aria-hidden="true"></span>
+      <canvas id="orbCanvas" aria-hidden="true"></canvas>
+    </button>
+  </div>
+
+  <p class="hint">Tap to speak</p>
+
+  <!-- Reference controls to preview each state -->
+  <div class="demo" role="group" aria-label="Reference: preview voice states">
+    <button type="button" data-state="idle" aria-pressed="true">Idle</button>
+    <button type="button" data-state="listening" aria-pressed="false">Listening</button>
+    <button type="button" data-state="speaking" aria-pressed="false">Speaking</button>
+    <button type="button" data-state="processing" aria-pressed="false">Processing</button>
+  </div>
+</main>
+
+<script>
+(() => {
+  // ---- Visual parameters per visual mode -------------------------------
+  // listening and speaking both map to "active" (same animation).
+  const MODE = {
+    idle:       { speed: 0.12, breath: 0.025, wave: 0.00, brightness: 0.85, glow: 0.45, pulse: 0.00, inOut: 0.00, core: 0.85 },
+    active:     { speed: 0.42, breath: 0.060, wave: 0.08, brightness: 1.00, glow: 1.00, pulse: 0.10, inOut: 0.00, core: 1.00 },
+    processing: { speed: 0.22, breath: 0.030, wave: 0.03, brightness: 0.95, glow: 0.70, pulse: 0.00, inOut: 0.10, core: 0.90 },
+  };
+
+  const screen = document.getElementById("screen");
+  const orb = document.getElementById("orb");
+  const canvas = document.getElementById("orbCanvas");
+  const ctx = canvas.getContext("2d");
+  const demoButtons = [...document.querySelectorAll(".demo button")];
+
+  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const motionScale = reducedMotion ? 0.3 : 1;
+
+  // ---- Mapping from app state to visual mode ---------------------------
+  function toVisual(state) {
+    return state === "listening" || state === "speaking" ? "active" : state;
+  }
+
+  // ---- Particle sphere (deterministic layout) --------------------------
+  const N = 360;
+  const GOLDEN = Math.PI * (3 - Math.sqrt(5));
+  const rnd = (i, salt) => Math.abs(Math.sin(i * 12.9898 + salt * 78.233) * 43758.5453) % 1;
+  const points = [];
+  for (let i = 0; i < N; i++) {
+    const y = 1 - (i / (N - 1)) * 2;
+    const r = Math.sqrt(1 - y * y);
+    const th = GOLDEN * i;
+    points.push({
+      x: Math.cos(th) * r,
+      y,
+      z: Math.sin(th) * r,
+      size: 0.6 + rnd(i, 1) * 1.6,
+      alpha: 0.35 + rnd(i, 2) * 0.65,
+      phase: rnd(i, 3) * Math.PI * 2,
+      tone: rnd(i, 4),
+    });
+  }
+
+  // ---- Canvas sizing (DPR-aware, ResizeObserver) -----------------------
+  let size = 0, dpr = 1;
+  function resize() {
+    const rect = canvas.getBoundingClientRect();
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    size = rect.width;
+    canvas.width = Math.round(size * dpr);
+    canvas.height = Math.round(size * dpr);
+  }
+  new ResizeObserver(resize).observe(canvas);
+  resize();
+
+  // ---- Animation loop --------------------------------------------------
+  const current = { ...MODE.idle };
+  let target = MODE.idle;
+  let angle = 0, t = 0, last = performance.now(), rafId = 0;
+
+  function frame(now) {
+    const dt = Math.min((now - last) / 1000, 0.05);
+    last = now;
+    t += dt;
+
+    // Smoothly interpolate toward target so state changes never snap
+    const k = 1 - Math.exp(-dt * 3);
+    for (const key in target) current[key] += (target[key] - current[key]) * k;
+
+    angle += dt * current.speed * motionScale;
+
+    const cx = size / 2, cy = size / 2;
+    const scale = size / 340;
+    const breath = Math.sin(t * 0.9) * current.breath * motionScale;
+    const R = size * 0.36 * (1 + breath);
+
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, size, size);
+
+    // Deep forest core
+    ctx.globalAlpha = 0.85 * current.core;
+    const core = ctx.createRadialGradient(cx, cy, R * 0.05, cx, cy, R * 1.05);
+    core.addColorStop(0, "#FFFFFF");
+    core.addColorStop(0.3, "#DCE7DC");
+    core.addColorStop(0.65, "#8FAF9B");
+    core.addColorStop(0.92, "#17483A");
+    core.addColorStop(1, "rgba(23,72,58,0)");
+    ctx.fillStyle = core;
+    ctx.beginPath();
+    ctx.arc(cx, cy, R * 1.05, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Project particles
+    const ca = Math.cos(angle), sa = Math.sin(angle);
+    const tilt = 0.3, ct = Math.cos(tilt), st = Math.sin(tilt);
+    const waveT = t * 2.2 * motionScale;
+    const projected = new Array(N);
+
+    for (let i = 0; i < N; i++) {
+      const p = points[i];
+      const phi = Math.acos(Math.max(-1, Math.min(1, p.y)));
+
+      // Y-axis rotation, then X-axis tilt
+      const rx = p.x * ca + p.z * sa;
+      const rz = -p.x * sa + p.z * ca;
+      const ry = p.y * ct - rz * st;
+      const rz2 = p.y * st + rz * ct;
+
+      // Radius modulation: waves, pulses, inward/outward motion
+      let waveR = 1;
+      if (current.wave) waveR += current.wave * motionScale * Math.sin(phi * 3 - waveT + p.phase * 0.2);
+      if (current.inOut) waveR += current.inOut * Math.sin(t * 0.9 + p.phase * 0.3) * (0.5 + 0.5 * p.tone);
+      if (current.pulse) {
+        const s = Math.max(0, Math.sin(t * 3.2 - phi * 2));
+        waveR += current.pulse * motionScale * s * s * s;
+      }
+
+      const persp = 1 + rz2 * 0.18;
+      const rr = R * waveR * persp;
+      projected[i] = {
+        px: cx + rx * rr,
+        py: cy + ry * rr,
+        depth: (rz2 + 1) / 2,
+        p,
+      };
+    }
+
+    projected.sort((a, b) => a.depth - b.depth);
+
+    for (const q of projected) {
+      const d = q.depth;
+      const alpha = q.p.alpha * (0.45 + 0.55 * d) * current.brightness;
+      const s = q.p.size * (0.7 + 0.6 * d) * scale;
+      // Back-facing particles recede into the Primary Green body;
+      // front-facing ones read as sage, with mint and white sparks.
+      let color;
+      if (d < 0.45) color = "143,175,155";                           // sage, recessed
+      else if (d > 0.93 && q.p.tone > 0.92) color = "255,255,255";   // white sparks
+      else if (q.p.tone < 0.7) color = "143,175,155";                // sage
+      else color = "220,231,220";                                    // soft mint
+      ctx.globalAlpha = Math.min(1, alpha);
+      ctx.fillStyle = `rgb(${color})`;
+      ctx.beginPath();
+      ctx.arc(q.px, q.py, s, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Soft highlight at upper-left for volume
+    ctx.globalAlpha = 0.16 * current.brightness;
+    const hl = ctx.createRadialGradient(cx - R * 0.35, cy - R * 0.4, 0, cx - R * 0.35, cy - R * 0.4, R * 0.7);
+    hl.addColorStop(0, "rgba(255,255,255,0.9)");
+    hl.addColorStop(1, "rgba(255,255,255,0)");
+    ctx.fillStyle = hl;
+    ctx.beginPath();
+    ctx.arc(cx, cy, R, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.globalAlpha = 1;
+    rafId = requestAnimationFrame(frame);
+  }
+
+  // Pause when hidden to save resources
+  document.addEventListener("visibilitychange", () => {
+    cancelAnimationFrame(rafId);
+    if (!document.hidden) {
+      last = performance.now();
+      rafId = requestAnimationFrame(frame);
+    }
+  });
+  window.addEventListener("pagehide", () => cancelAnimationFrame(rafId));
+
+  // ---- State handling --------------------------------------------------
+  // In the real app, these would come from the existing voice state.
+  function setState(state) {
+    const visual = toVisual(state);
+    target = MODE[visual];
+    screen.dataset.visual = visual;
+    orb.disabled = visual === "processing";
+    orb.setAttribute(
+      "aria-label",
+      visual === "idle" ? "Start voice conversation" :
+      visual === "active" ? "Voice conversation in progress" :
+      "Processing your request"
+    );
+    demoButtons.forEach(b => b.setAttribute("aria-pressed", String(b.dataset.state === state)));
+  }
+
+  // Reference-only: tapping the orb simulates the existing activation handler
+  orb.addEventListener("click", () => {
+    if (screen.dataset.visual === "idle") setState("listening");
+  });
+
+  demoButtons.forEach(b => b.addEventListener("click", () => setState(b.dataset.state)));
+
+  setState("idle");
+  rafId = requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

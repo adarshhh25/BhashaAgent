@@ -42,6 +42,19 @@ export class GnaniPrismaAdapter implements SttProvider {
   private isExplicitlyClosed = false;
   private isConnecting = false;
   private frameBuffer: Buffer[] = [];
+  private effectiveLanguage: string;
+
+  constructor(private requestedLanguage?: string) {
+    const rawLang = (this.requestedLanguage || config.gnani.languageCode || "hi-IN").toLowerCase();
+    this.effectiveLanguage =
+      rawLang.startsWith("hi") || rawLang.includes("hinglish")
+        ? "hi-IN"
+        : rawLang.startsWith("mr")
+          ? "mr-IN"
+          : rawLang.startsWith("en")
+            ? "en-IN"
+            : config.gnani.languageCode;
+  }
 
   async connect(): Promise<void> {
     if (this.isExplicitlyClosed) return;
@@ -52,14 +65,17 @@ export class GnaniPrismaAdapter implements SttProvider {
 
     this.isConnecting = true;
     const requestId = randomUUID();
-    console.log(`[GnaniPrisma] STT connection attempt: endpoint=${config.gnani.endpoint}, model=${config.gnani.model}, languageCode=${config.gnani.languageCode}, sampleRate=${config.gnani.sampleRate}, requestId=${requestId}`);
+
+    const effectiveGnaniLang = this.effectiveLanguage;
+
+    console.log(`[GnaniPrisma] STT connection attempt: endpoint=${config.gnani.endpoint}, model=${config.gnani.model}, languageCode=${effectiveGnaniLang}, sampleRate=${config.gnani.sampleRate}, requestId=${requestId}`);
 
     await new Promise<void>((resolve, reject) => {
       const socket = new WebSocket(config.gnani.endpoint, {
         headers: {
           "x-api-key-id": config.gnani.apiKey,
           model: config.gnani.model,
-          language_code: config.gnani.languageCode,
+          language_code: effectiveGnaniLang,
           format: config.gnani.format,
           "x-sample-rate": String(config.gnani.sampleRate),
           "x-idle-timeout-sec": String(config.gnani.idleTimeoutSeconds),
@@ -115,8 +131,13 @@ export class GnaniPrismaAdapter implements SttProvider {
     const parsed = providerEventSchema.safeParse(value);
     if (!parsed.success) {
       const rawObj = value as Record<string, unknown>;
-      if (rawObj?.type === "transcript" && typeof rawObj.text === "string" && rawObj.text.trim()) {
-        const text = rawObj.text.trim();
+      if (rawObj?.type === "transcript") {
+        const textCandidate = typeof rawObj.text === "string" ? rawObj.text.trim() : typeof rawObj.transcript === "string" ? rawObj.transcript.trim() : "";
+        if (!textCandidate) {
+          // Empty audio frame or silence segment; ignore cleanly without spurious warnings
+          return;
+        }
+        const text = textCandidate;
         const segId = String(rawObj.segment_id || `seg-${Date.now()}`);
         console.log(`[GnaniPrisma] Final transcript received (fallback parser): segmentId=${segId}, text="${text}"`);
         this.eventListener({
@@ -159,15 +180,20 @@ export class GnaniPrismaAdapter implements SttProvider {
 
     if (event.type === "connected") {
       const active = event.config;
-      console.log(`[GnaniPrisma] Provider session ready: sampleRate=${active?.sample_rate ?? config.gnani.sampleRate}, chunkSize=${active?.chunk_size ?? config.gnani.frameBytes / 2}, languageCode=${active?.language_code ?? config.gnani.languageCode}, format=${active?.format ?? config.gnani.format}`);
+      const expectedLang = this.effectiveLanguage || config.gnani.languageCode;
+      console.log(`[GnaniPrisma] Provider session ready: sampleRate=${active?.sample_rate ?? config.gnani.sampleRate}, chunkSize=${active?.chunk_size ?? config.gnani.frameBytes / 2}, languageCode=${active?.language_code ?? expectedLang}, format=${active?.format ?? config.gnani.format}`);
 
-      if (active && (
-        active.sample_rate !== undefined && active.sample_rate !== config.gnani.sampleRate
-        || active.chunk_size !== undefined && active.chunk_size !== config.gnani.frameBytes / 2
-        || active.language_code !== undefined && active.language_code !== config.gnani.languageCode
-        || active.format !== undefined && active.format !== config.gnani.format
-      )) {
-        console.error(`[GnaniPrisma] Provider configuration mismatch`);
+      const languageMatches =
+        !active?.language_code ||
+        active.language_code === expectedLang ||
+        active.language_code === config.gnani.languageCode ||
+        active.language_code.toLowerCase().startsWith(expectedLang.slice(0, 2).toLowerCase());
+
+      const sampleRateMatches = !active?.sample_rate || active.sample_rate === config.gnani.sampleRate;
+      const formatMatches = !active?.format || active.format === config.gnani.format;
+
+      if (!languageMatches || !sampleRateMatches || !formatMatches) {
+        console.error(`[GnaniPrisma] Provider configuration mismatch: expected language=${expectedLang}, sampleRate=${config.gnani.sampleRate}, got language=${active?.language_code}, sampleRate=${active?.sample_rate}`);
         this.eventListener({ type: "error", code: "PROVIDER_CONFIGURATION_ERROR", message: "Speech provider configuration was not accepted" });
         return;
       }

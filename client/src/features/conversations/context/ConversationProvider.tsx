@@ -347,9 +347,9 @@ export function ConversationProvider({ children }: ConversationProviderProps) {
           formTaskId,
         });
 
-        // 3. Update optimistic user message to persisted
+        // 3. Update optimistic user message to persisted with detected language
         setMessages((prev) =>
-          prev.map((m) => (m.id === tempId ? { ...m, clientStatus: 'persisted' } : m)),
+          prev.map((m) => (m.id === tempId ? { ...m, clientStatus: 'persisted', language: (turnResult as any).language?.detected || m.language } : m)),
         );
 
         // 4. Append assistant response
@@ -359,7 +359,7 @@ export function ConversationProvider({ children }: ConversationProviderProps) {
           role: 'ASSISTANT',
           content: turnResult.response,
           inputMode: 'TEXT',
-          language: selectedLanguage,
+          language: (turnResult as any).language?.responseLanguage || selectedLanguage,
           createdAt: new Date().toISOString(),
           metadata: {
             intent: turnResult.intent?.primary,

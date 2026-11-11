@@ -1,82 +1,112 @@
 import { useRef } from 'react';
 import { useVoiceOrb } from '../hooks/useVoiceOrb';
-import type { VoiceOrbState } from '../types/voice.types';
+import type {
+  VoiceOrbState,
+  VoiceOrbVisualState,
+  VoicePresentationState,
+} from '../types/voice.types';
+import { toVoiceOrbVisualState } from './voice-orb/orb-constants';
 
-interface VoiceOrbProps {
-  state: VoiceOrbState;
+export interface VoiceOrbProps {
+  state: VoiceOrbVisualState | VoiceOrbState | VoicePresentationState;
   size?: number;
   label?: string;
   sublabel?: string;
   onClick?: () => void;
   interactive?: boolean;
+  disabled?: boolean;
   className?: string;
 }
 
 export function VoiceOrb({
   state,
-  size = 260,
+  size = 240,
   label,
   sublabel,
   onClick,
   interactive = true,
+  disabled = false,
   className = '',
 }: VoiceOrbProps) {
-  const sphereCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const ambientCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const visualState = toVoiceOrbVisualState(state);
 
   useVoiceOrb({
     state,
-    ambientCanvasRef,
-    sphereCanvasRef,
+    canvasRef,
     containerSize: size,
   });
 
-  const hasLabels = Boolean(label || sublabel);
+  const isInteractive = interactive && !disabled && visualState !== 'processing';
+
+  // Opacity for soft outer sage glow matching ai.html
+  const glowOpacityClass =
+    visualState === 'active'
+      ? 'opacity-100'
+      : visualState === 'processing'
+      ? 'opacity-75'
+      : 'opacity-45';
+
+  // Per spec: Display only "Tap to speak" in idle mode, no text during active/processing
+  const displayLabel = visualState === 'idle' ? (label ?? 'Tap to speak') : null;
 
   return (
     <div
       className={`relative flex flex-col items-center justify-center select-none ${className}`}
-      style={{ width: `${size + 40}px`, height: hasLabels ? `${size + 60}px` : `${size}px` }}
+      data-visual={visualState}
     >
-      {/* Ambient background glow canvas */}
-      <canvas
-        ref={ambientCanvasRef}
-        className="absolute pointer-events-none transition-opacity duration-500"
-        style={{
-          width: `${size + 60}px`,
-          height: `${size + 60}px`,
-          top: '0px',
-        }}
-      />
-
-      {/* Main interactive particle sphere */}
+      {/* Orb Stage Container */}
       <div
-        role={interactive ? 'button' : undefined}
-        tabIndex={interactive ? 0 : undefined}
-        aria-label={label ? `${label} - Voice assistant` : 'Voice assistant orb'}
-        onClick={interactive ? onClick : undefined}
-        onKeyDown={(e) => {
-          if (interactive && (e.key === 'Enter' || e.key === ' ')) {
-            e.preventDefault();
-            onClick?.();
-          }
+        className="relative"
+        style={{
+          width: `${size}px`,
+          height: `${size}px`,
+          maxWidth: '100%',
+          aspectRatio: '1',
         }}
-        className={`relative z-10 rounded-full flex items-center justify-center focus:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
-          interactive ? 'cursor-pointer hover:scale-[1.02] active:scale-[0.98] transition-transform' : ''
-        }`}
-        style={{ width: `${size}px`, height: `${size}px` }}
       >
-        <canvas ref={sphereCanvasRef} className="block" />
+        {/* Soft outer sage glow behind the orb from ai.html */}
+        <span
+          aria-hidden="true"
+          className={`absolute inset-[-12%] rounded-full pointer-events-none transition-opacity duration-800 ${glowOpacityClass}`}
+          style={{
+            background:
+              'radial-gradient(circle, rgba(143, 175, 155, 0.35) 0%, transparent 65%)',
+          }}
+        />
+
+        {/* Interactive Orb Button */}
+        <button
+          type="button"
+          onClick={isInteractive ? onClick : undefined}
+          disabled={!isInteractive}
+          aria-label={
+            visualState === 'idle'
+              ? 'Start voice conversation'
+              : visualState === 'active'
+              ? 'Voice conversation in progress'
+              : 'Processing your request'
+          }
+          className={`relative z-10 w-full h-full rounded-full block border-none bg-transparent p-0 focus:outline-none focus-visible:outline-2 focus-visible:outline-[#17483A] focus-visible:outline-offset-8 transition-transform duration-200 ${
+            isInteractive
+              ? 'cursor-pointer hover:scale-[1.02] active:scale-[0.98]'
+              : 'cursor-default'
+          }`}
+        >
+          <canvas
+            ref={canvasRef}
+            aria-hidden="true"
+            className="w-full h-full block rounded-full"
+          />
+        </button>
       </div>
 
-      {/* State label and instruction */}
-      {(label || sublabel) && (
-        <div className="relative z-10 flex flex-col items-center text-center mt-2 px-2">
-          {label && (
-            <span className="text-xs font-semibold text-text-primary tracking-tight">
-              {label}
-            </span>
-          )}
+      {/* State label - displays "Tap to speak" only in idle mode per spec */}
+      {displayLabel && (
+        <div className="relative z-10 flex flex-col items-center text-center mt-3 px-2 min-h-[1.4em]">
+          <span className="text-xs sm:text-sm font-medium text-[#102A24] tracking-wide transition-opacity duration-400">
+            {displayLabel}
+          </span>
           {sublabel && (
             <span className="text-[11px] text-text-secondary mt-0.5 max-w-[240px] truncate">
               {sublabel}
@@ -88,3 +118,4 @@ export function VoiceOrb({
   );
 }
 
+export default VoiceOrb;

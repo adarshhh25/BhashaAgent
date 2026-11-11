@@ -5,6 +5,7 @@ import { prisma } from "../../config/database";
 import { buildAgentContext } from "../context/context.service";
 import { getLLMProvider } from "../llm/llm.factory";
 import { orchestrate } from "./agent.orchestrator";
+import { detectConversationLanguage } from "./language-detector";
 import type { AgentTurnResult } from "./agent.types";
 
 export interface FormBrowserAction {
@@ -62,12 +63,16 @@ export async function runAgentTurn(input: {
   language?: string;
   formTaskId?: string;
 }): Promise<AgentTurnResult & { assistantMessageId: string; formActions?: FormBrowserAction[] }> {
+  const detectedLanguage = detectConversationLanguage(input.content, input.language);
+  const effectiveLanguage = (input.language && input.language.toLowerCase().startsWith(detectedLanguage))
+    ? input.language
+    : detectedLanguage;
   const message = await createUserMessage({
     userId: input.userId,
     conversationId: input.conversationId,
     content: input.content,
     inputMode: "TEXT",
-    language: input.language,
+    language: effectiveLanguage,
   });
   const contextResult = await buildAgentContext({
     userId: input.userId,
@@ -77,11 +82,12 @@ export async function runAgentTurn(input: {
   });
   const result = await orchestrate(input.userId, contextResult.context, getLLMProvider());
   if (!result.response.trim()) throw new HttpError(502, "EMPTY_AGENT_RESPONSE", "The assistant returned an empty response");
+  const responseLanguage = result.language?.responseLanguage || effectiveLanguage;
   const assistant = await createAssistantMessage({
     conversationId: input.conversationId,
     content: result.response,
-    inputMode: "VOICE",
-    language: input.language,
+    inputMode: "TEXT",
+    language: responseLanguage,
     metadata: { intent: result.intent.primary, decision: result.decision.type },
   });
   const formActions = extractFormActions(result.toolResults);
@@ -137,12 +143,16 @@ async function claimVoiceMessage(input: VoiceTranscriptInput) {
       });
       return { key, message: updated, assistant: null, reused: false };
     }
+    const detectedLanguage = detectConversationLanguage(input.content, input.language);
+    const effectiveLanguage = (input.language && input.language.toLowerCase().startsWith(detectedLanguage))
+      ? input.language
+      : detectedLanguage;
     const message = await createUserMessageInTransaction(transaction, {
       userId: input.userId,
       conversationId: input.conversationId,
       content: input.content,
       inputMode: "VOICE",
-      language: input.language,
+      language: effectiveLanguage,
       metadata: {
         source: "voice",
         voice: {
@@ -158,10 +168,16 @@ async function claimVoiceMessage(input: VoiceTranscriptInput) {
   });
 }
 
-export async function processVoiceTranscript(input: VoiceTranscriptInput): Promise<{ response: string; assistantMessageId: string; reused: boolean; formActions?: FormBrowserAction[] }> {
+export async function processVoiceTranscript(input: VoiceTranscriptInput): Promise<{
+  response: string;
+  assistantMessageId: string;
+  reused: boolean;
+  language?: string;
+  formActions?: FormBrowserAction[];
+}> {
   if (!input.content.trim()) throw new HttpError(400, "INVALID_TRANSCRIPT", "Transcript cannot be empty");
   const claimed = await claimVoiceMessage(input);
-  if (claimed.assistant) return { response: claimed.assistant.content, assistantMessageId: claimed.assistant.id, reused: true };
+  if (claimed.assistant) return { response: claimed.assistant.content, assistantMessageId: claimed.assistant.id, reused: true, language: claimed.assistant.language ?? undefined };
   try {
     const contextResult = await buildAgentContext({
       userId: input.userId,
@@ -171,10 +187,12 @@ export async function processVoiceTranscript(input: VoiceTranscriptInput): Promi
     });
     const result = await orchestrate(input.userId, contextResult.context, getLLMProvider());
     if (!result.response.trim()) throw new HttpError(502, "EMPTY_AGENT_RESPONSE", "The assistant returned an empty response");
+    const detectedLanguage = detectConversationLanguage(input.content, input.language);
+    const responseLanguage = result.language?.responseLanguage || detectedLanguage;
     const assistant = await createAssistantMessage({
       conversationId: input.conversationId,
       content: result.response,
-      language: input.language,
+      language: responseLanguage,
       metadata: { intent: result.intent.primary, decision: result.decision.type, source: "voice", voice: { idempotencyKey: claimed.key, userMessageId: claimed.message.id } },
     });
     await prisma.message.update({
@@ -182,7 +200,13 @@ export async function processVoiceTranscript(input: VoiceTranscriptInput): Promi
       data: { metadata: { source: "voice", voice: { idempotencyKey: claimed.key, sessionId: input.voiceSessionId, provider: "gnani", providerSegmentId: input.providerSegmentId, status: "completed" } } },
     });
     const formActions = extractFormActions(result.toolResults);
-    return { response: assistant.content, assistantMessageId: assistant.id, reused: false, formActions: formActions.length > 0 ? formActions : undefined };
+    return {
+      response: assistant.content,
+      assistantMessageId: assistant.id,
+      reused: false,
+      language: responseLanguage,
+      formActions: formActions.length > 0 ? formActions : undefined,
+    };
   } catch (error) {
     const current = await prisma.message.findUnique({ where: { id: claimed.message.id } });
     const metadata = current?.metadata && typeof current.metadata === "object" && !Array.isArray(current.metadata)

@@ -74,6 +74,16 @@ function resolveTimbreLanguage(language?: string): string {
   return config.gnaniTts.language;
 }
 
+function resolveVoiceForLanguage(model: string, requestedVoice: string, language: string): string {
+  if (model === "timbre-v3.0") return requestedVoice;
+  if (model === "timbre-v2.5" && V25_LANGUAGE_VOICES[language]) {
+    if (V25_LANGUAGE_VOICES[language].has(requestedVoice)) return requestedVoice;
+    const first = Array.from(V25_LANGUAGE_VOICES[language])[0];
+    return first || requestedVoice;
+  }
+  return requestedVoice;
+}
+
 export class GnaniTimbreAdapter implements TtsProvider {
   private socket?: WebSocket;
   private eventListener: (event: TtsAdapterEvent) => void = () => undefined;
@@ -84,6 +94,7 @@ export class GnaniTimbreAdapter implements TtsProvider {
     if (!config.gnaniTts.apiKey) throw new TtsConfigurationError("Gnani TTS provider is not configured");
     if (!text.trim()) throw new TtsConfigurationError("TTS text cannot be empty");
     const targetLanguage = resolveTimbreLanguage(language);
+    const targetVoice = resolveVoiceForLanguage(config.gnaniTts.model, config.gnaniTts.voice, targetLanguage);
     await new Promise<void>((resolve, reject) => {
       const socket = new WebSocket(config.gnaniTts.endpoint, {
         headers: { "X-API-Key-ID": config.gnaniTts.apiKey },
@@ -96,7 +107,7 @@ export class GnaniTimbreAdapter implements TtsProvider {
       socket.on("open", () => {
         socket.send(JSON.stringify({
           text,
-          voice: config.gnaniTts.voice,
+          voice: targetVoice,
           model: config.gnaniTts.model,
           language: targetLanguage,
           speed: config.gnaniTts.speed,

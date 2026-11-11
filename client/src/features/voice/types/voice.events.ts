@@ -116,6 +116,7 @@ export const serverAssistantResponseEventSchema = z.object({
   assistantMessageId: z.string(),
   response: z.string(),
   reused: z.boolean().optional(),
+  language: z.string().optional(),
   formActions: z.array(formBrowserActionSchema).optional(),
 });
 

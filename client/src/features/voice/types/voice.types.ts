@@ -13,9 +13,10 @@ export type VoiceProtocolVersion = typeof VOICE_PROTOCOL_VERSION;
 
 /**
  * Visual states for the Fibonacci particle Voice Orb.
- * Directly corresponds to the 4 states in voice-orb-sphere.html.
+ * Supports the 4 legacy state names as well as the 3 Claude visual modes.
  */
 export type VoiceOrbState = 'idle' | 'listening' | 'thinking' | 'speaking';
+export type VoiceOrbVisualState = 'idle' | 'active' | 'processing';
 
 /**
  * Comprehensive frontend voice lifecycle presentation states (FE-8).

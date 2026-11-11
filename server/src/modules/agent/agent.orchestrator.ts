@@ -3,6 +3,7 @@ import { LLMError } from "../llm/llm.errors";
 import { parseAgentOutput } from "./agent.validator";
 import { systemPrompt } from "./agent.prompt";
 import { findTool, toolDefinitions } from "./agent.tools";
+import { detectConversationLanguage } from "./language-detector";
 import type { AgentContext } from "../context/context.types";
 import type { LLMProvider, LLMMessage } from "../llm/llm.types";
 import type { AgentLLMOutput, AgentTurnResult } from "./agent.types";
@@ -10,33 +11,8 @@ import type { AgentLLMOutput, AgentTurnResult } from "./agent.types";
 const MAX_ITERATIONS = 3;
 const MAX_TOOL_CALLS = 4;
 
-function computeAdaptiveOutputBudget(context: AgentContext, iteration: number): number {
-  const content = context.request.currentUserMessage.content.trim().toLowerCase();
-
-  // Complex tasks: active form tasks, intelligent mapping, or multi-step tool iterations
-  if (context.formTask?.id || iteration > 0) {
-    return 1000;
-  }
-
-  // Detailed explanation or multi-step guide requests
-  const isDetailedRequest =
-    content.length > 80 ||
-    /explain|step by step|how to|guide|details|list|विस्तार|कसे|माहिती|प्रक्रिया/.test(content);
-  if (isDetailedRequest) {
-    return 1200;
-  }
-
-  // Simple questions, greetings, voice acknowledgments
-  if (content.length < 35 && !/explain|step by step|how to|guide|details|list|विस्तार/.test(content)) {
-    return 400;
-  }
-
-  // Standard conversations, queries, memories, corrections
-  if (content.length > 25 || content.includes("?") || content.includes("क्या") || content.includes("का")) {
-    return 650;
-  }
-
-  return 400;
+function computeAdaptiveOutputBudget(_context: AgentContext, _iteration: number): number {
+  return 2048;
 }
 
 function providerError(error: unknown): never {
@@ -95,13 +71,17 @@ export async function orchestrate(
             role: "assistant",
             content: response.content ?? "",
           });
+          const detectedTurnLang = detectConversationLanguage(
+            context.request.currentUserMessage.content || "",
+            context.request.currentUserMessage.language || context.user?.preferredLanguage || "en",
+          );
           messages.push({
             role: "user",
             content: [
               "Your previous response did not match the required decision schema.",
               "Return only a JSON object with exactly these required fields:",
-              '{"intent":{"primary":"GREETING","secondary":[],"confidence":0.0},"language":{"detected":"en","responseLanguage":"en"},"decision":{"type":"respond"},"toolCalls":[],"responseDraft":"..."}',
-              "Use the most appropriate intent and language values for the user message. Set toolCalls to an empty array because tools are not executed during recovery. Do not add a response field.",
+              `{"intent":{"primary":"GENERAL_QUESTION","secondary":[],"confidence":0.9},"language":{"detected":"${detectedTurnLang}","responseLanguage":"${detectedTurnLang}"},"decision":{"type":"respond"},"toolCalls":[],"responseDraft":"..."}`,
+              `Write responseDraft in ${detectedTurnLang.toUpperCase()}. Set toolCalls to an empty array because tools are not executed during recovery. Do not add a response field.`,
             ].join(" "),
           });
           continue;
@@ -112,7 +92,14 @@ export async function orchestrate(
         ? output.clarification.question
         : output.responseDraft;
       if (!responseText) throw new HttpError(502, "INVALID_AGENT_RESPONSE", "The assistant returned an unusable response");
-      return { response: responseText, intent: output.intent, decision: output.decision, context, toolResults };
+      return {
+        response: responseText,
+        intent: output.intent,
+        language: output.language,
+        decision: output.decision,
+        context,
+        toolResults,
+      };
     }
     if (toolsExecuted) {
       throw new HttpError(502, "INVALID_AGENT_RESPONSE", "The assistant requested another operation after tool execution");
@@ -137,7 +124,19 @@ export async function orchestrate(
         const data = await tool.execute(userId, context, argumentsValue);
         console.log(`[AgentOrchestrator] Executed tool ${call.name} successfully:`, data);
         toolResults.push({ toolCallId: call.id, name: call.name, success: true, data });
-        messages.push({ role: "tool", toolCallId: call.id, content: JSON.stringify({ success: true, data }) });
+        const detectedTurnLang = detectConversationLanguage(
+          context.request.currentUserMessage.content || "",
+          context.request.currentUserMessage.language || context.user?.preferredLanguage || "en",
+        );
+        messages.push({
+          role: "tool",
+          toolCallId: call.id,
+          content: JSON.stringify({
+            success: true,
+            data,
+            mandatoryDirective: `Tool executed. Now output final JSON with responseDraft in ${detectedTurnLang.toUpperCase()} confirming this action to the user in their language (e.g. if Hindi, say 'मैंने राज्य में बिहार भर दिया है।'). Never use English.`,
+          }),
+        });
       } catch (toolExecErr) {
         console.warn(`[AgentOrchestrator] Failed executing tool ${call.name}:`, toolExecErr);
         toolResults.push({ toolCallId: call.id, name: call.name, success: false });

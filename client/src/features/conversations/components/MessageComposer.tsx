@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, type KeyboardEvent, type ChangeEvent } from 'react';
-import { ArrowUp, Loader2 } from 'lucide-react';
+import { ArrowUp, Loader2, Mic } from 'lucide-react';
 import type { SupportedLanguage } from '../types/conversation.types';
 
 interface MessageComposerProps {
@@ -8,6 +8,7 @@ interface MessageComposerProps {
   selectedLanguage?: SupportedLanguage;
   onLanguageChange?: (lang: SupportedLanguage) => void;
   onOpenVoice?: () => void;
+  isVoiceActive?: boolean;
   disabled?: boolean;
 }
 
@@ -17,6 +18,8 @@ const MAX_TEXTAREA_HEIGHT = 140; // Max height before vertical scrolling
 export function MessageComposer({
   onSend,
   isSubmitting,
+  onOpenVoice,
+  isVoiceActive = false,
   disabled = false,
 }: MessageComposerProps) {
   const [content, setContent] = useState('');
@@ -103,14 +106,32 @@ export function MessageComposer({
           />
         </div>
 
-        {/* Right Side: Fixed Send Button pinned to the bottom-right */}
-        <div className="shrink-0 self-end flex items-center pb-0.5">
+        {/* Right Side: Microphone + Send Arrow pinned to bottom-right */}
+        <div className="shrink-0 self-end flex items-center gap-1.5 pb-0.5">
+          {onOpenVoice && (
+            <button
+              type="button"
+              onClick={onOpenVoice}
+              disabled={disabled || isSubmitting}
+              aria-label={isVoiceActive ? 'Close Voice Mode' : 'Start Voice Mode'}
+              title={isVoiceActive ? 'Close Voice Mode' : 'Voice Mode'}
+              className={`w-7 h-7 rounded-full flex items-center justify-center transition-all shrink-0 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent cursor-pointer ${
+                isVoiceActive
+                  ? 'bg-accent text-white shadow-2xs'
+                  : 'text-text-primary hover:text-accent hover:bg-accent/10 active:bg-accent/20 active:scale-95'
+              } disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent`}
+            >
+              <Mic className="w-4 h-4" />
+            </button>
+          )}
+
           <button
             type="button"
             onClick={() => void handleSend()}
             disabled={!content.trim() || isSubmitting || disabled}
             aria-label="Send message"
-            className="w-7 h-7 rounded-full bg-accent text-white flex items-center justify-center hover:bg-accent-hover transition-colors disabled:opacity-40 disabled:hover:bg-accent focus:outline-none shadow-2xs shrink-0"
+            title="Send message"
+            className="w-7 h-7 rounded-full bg-accent text-white flex items-center justify-center hover:bg-accent-hover transition-colors disabled:opacity-40 disabled:hover:bg-accent focus:outline-none shadow-2xs shrink-0 cursor-pointer"
           >
             {isSubmitting ? (
               <Loader2 className="w-3.5 h-3.5 animate-spin" />

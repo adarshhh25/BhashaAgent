@@ -10,6 +10,7 @@ import { GnaniPrismaAdapter, type SttProvider } from "./gnani.adapter";
 import { HttpError } from "../../common/errors";
 import { GnaniTimbreAdapter, type TtsProvider } from "./timbre.adapter";
 import { defaultVoiceSessionRegistry, VoiceSessionRegistry, type VoiceSession } from "./voice.registry";
+import { detectConversationLanguage } from "../agent/language-detector";
 
 export type VoiceTranscriptHandler = (input: {
   userId: string;
@@ -19,7 +20,7 @@ export type VoiceTranscriptHandler = (input: {
   content: string;
   language?: string;
   formTaskId?: string;
-}) => Promise<{ response: string; assistantMessageId: string; reused: boolean }>;
+}) => Promise<{ response: string; assistantMessageId: string; reused: boolean; language?: string; formActions?: unknown }>;
 
 export function clearActiveVoiceSessions(): void {
   defaultVoiceSessionRegistry.clear();
@@ -54,7 +55,7 @@ function rejectUpgrade(socket: Duplex, statusCode: number, statusText: string, m
 
 export function attachVoiceGateway(
   server: HttpServer,
-  providerFactory: () => SttProvider = () => new GnaniPrismaAdapter(),
+  providerFactory: (language?: string) => SttProvider = (lang) => new GnaniPrismaAdapter(lang),
   transcriptHandler?: VoiceTranscriptHandler,
   ttsFactory: () => TtsProvider = () => new GnaniTimbreAdapter(),
   registry: VoiceSessionRegistry = defaultVoiceSessionRegistry,
@@ -105,7 +106,7 @@ export function attachVoiceGateway(
     const session = allocation.session;
 
     try {
-      const provider = providerFactory();
+      const provider = providerFactory(session.language);
       gateway.handleUpgrade(request, socket, head, (client) => {
         gateway.emit("connection", client, request, session, provider);
       });
@@ -178,29 +179,37 @@ export function attachVoiceGateway(
         console.log(`[VoiceGateway][${voiceSessionId}] Final transcript received: segmentId=${event.segmentId}, durationMs=${event.audioDurationMs}, language=${event.detectedLanguageCode || 'auto'}`);
         send(socket, "TRANSCRIPT", { sessionState: "READY", transcript: { text: event.text, timestamp: event.timestamp, audioDurationMs: event.audioDurationMs, segmentId: event.segmentId, segmentIndex: event.segmentIndex, latencyMs: event.latencyMs, detectedLanguageCode: event.detectedLanguageCode, utteranceId: event.utteranceId, isFinal: true } });
         if (transcriptHandler) {
-          console.log(`[VoiceGateway][${voiceSessionId}] Voice turn received active form context: taskId=${activeFormTaskId ?? 'none'}`);
+          const detectedTurnLang = detectConversationLanguage(event.text, session.language || event.detectedLanguageCode);
+          const effectiveLang = (event.detectedLanguageCode && event.detectedLanguageCode.toLowerCase().startsWith(detectedTurnLang))
+            ? event.detectedLanguageCode
+            : (session.language && session.language.toLowerCase().startsWith(detectedTurnLang))
+              ? session.language
+              : detectedTurnLang;
+          console.log(`[VoiceGateway][${voiceSessionId}] Voice turn received: detectedLang=${detectedTurnLang}, effectiveLang=${effectiveLang}, active form context taskId=${activeFormTaskId ?? 'none'}`);
           void transcriptHandler({
             userId: session.userId,
             conversationId: session.conversationId,
             voiceSessionId,
             providerSegmentId: event.segmentId,
             content: event.text,
-            language: session.language || event.detectedLanguageCode,
+            language: effectiveLang,
             formTaskId: activeFormTaskId,
           }).then((result) => {
             if (!closed) {
               const actionsCount = Array.isArray((result as any).formActions) ? (result as any).formActions.length : 0;
-              console.log(`[VoiceGateway][${voiceSessionId}] Dispatched assistant response for segmentId=${event.segmentId}, formActionsCount=${actionsCount}`);
+              const responseLang = (result as { language?: string }).language || detectedTurnLang;
+              console.log(`[VoiceGateway][${voiceSessionId}] Dispatched assistant response for segmentId=${event.segmentId}, responseLang=${responseLang}, formActionsCount=${actionsCount}`);
               send(socket, "ASSISTANT_RESPONSE", {
                 conversationId: session.conversationId,
                 assistantMessageId: result.assistantMessageId,
                 response: result.response,
                 reused: result.reused,
+                language: responseLang,
                 formActions: (result as { formActions?: unknown }).formActions,
               });
               if (!ttsBusy) {
                 ttsBusy = true;
-                void tts.synthesize(result.response, session.language).catch((error: unknown) => {
+                void tts.synthesize(result.response, responseLang).catch((error: unknown) => {
                   ttsBusy = false;
                   if (!closed) send(socket, "ERROR", { error: { code: error instanceof HttpError ? error.code : "TTS_FAILED", message: error instanceof HttpError ? error.message : "Text-to-speech failed" } });
                 });

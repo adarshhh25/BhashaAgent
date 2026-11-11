@@ -155,8 +155,13 @@ export class GeminiLLMProvider implements LLMProvider {
           try {
             const generateConfig: Record<string, unknown> = {
               temperature: request.temperature ?? config.gemini.temperature,
-              maxOutputTokens: request.maxOutputTokens ?? config.gemini.maxOutputTokens,
+              maxOutputTokens: Math.max(request.maxOutputTokens ?? 1500, 2048),
             };
+
+            // Disable thinking for fast, deterministic, non-truncated agent execution
+            if (currentModel.includes("2.5") || currentModel.includes("flash")) {
+              (generateConfig as any).thinkingConfig = { thinkingBudget: 0 };
+            }
 
             if (systemInstruction) {
               generateConfig.systemInstruction = systemInstruction;
@@ -230,14 +235,32 @@ export class GeminiLLMProvider implements LLMProvider {
                 contentText = contentText.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
               }
               // If model returned conversational prose without JSON braces, wrap it into a valid decision JSON
-              if (toolCalls.length === 0 && (!contentText.startsWith("{") || !contentText.endsWith("}"))) {
-                contentText = JSON.stringify({
-                  intent: { primary: "GENERAL_QUESTION", secondary: [], confidence: 0.9 },
-                  language: { detected: "en", responseLanguage: "en" },
-                  decision: { type: "respond" },
-                  toolCalls: [],
-                  responseDraft: contentText,
-                });
+              if (toolCalls.length === 0) {
+                if (!contentText.startsWith("{")) {
+                  contentText = JSON.stringify({
+                    intent: { primary: "GENERAL_QUESTION", secondary: [], confidence: 0.9 },
+                    language: { detected: "en", responseLanguage: "en" },
+                    decision: { type: "respond" },
+                    toolCalls: [],
+                    responseDraft: contentText,
+                  });
+                } else if (!contentText.endsWith("}")) {
+                  // Partial JSON starting with '{' but truncated
+                  const draftMatch = contentText.match(/"responseDraft"\s*:\s*"((?:[^"\\]|\\.)*)"?/);
+                  if (draftMatch && draftMatch[1]) {
+                    const cleanDraft = draftMatch[1].replace(/\\n/g, "\n").replace(/\\"/g, '"');
+                    contentText = JSON.stringify({
+                      intent: { primary: "GENERAL_QUESTION", secondary: [], confidence: 0.9 },
+                      language: { detected: "en", responseLanguage: "en" },
+                      decision: { type: "respond" },
+                      toolCalls: [],
+                      responseDraft: cleanDraft,
+                    });
+                  } else {
+                    // Try closing the JSON structure safely
+                    contentText = contentText.replace(/,\s*"[^"]*"?\s*:?\s*$/, "") + "}";
+                  }
+                }
               }
             }
 

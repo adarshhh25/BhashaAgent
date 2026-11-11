@@ -3,6 +3,8 @@ import { getConversationContext } from "../conversations/context.service";
 import { getRelevantMemories, createProposal } from "../memories/memory.service";
 import { getTask, listTasks, setFieldValue } from "../form-tasks/form-task.service";
 import { runIntelligentMapping } from "../form-intelligence/form-intelligence.service";
+import { conceptForText } from "../form-intelligence/field-matcher.service";
+import { matchOption, type FormOption } from "../form-intelligence/option-matcher.service";
 import type { AgentContext } from "../context/context.types";
 import type { LLMToolDefinition } from "../llm/llm.types";
 
@@ -55,6 +57,48 @@ const proposalTool: AgentTool = {
   },
 };
 
+function findTargetField(
+  targetIdOrName: string,
+  fields: AgentContext["formTask"]["detectedFields"],
+) {
+  const search = targetIdOrName.toLowerCase().trim();
+  // 1. Direct match on id, identifier, name, or label
+  const direct = fields.find((candidate) =>
+    candidate.id === targetIdOrName ||
+    (candidate.fieldIdentifier && candidate.fieldIdentifier.toLowerCase() === search) ||
+    (candidate.name && candidate.name.toLowerCase() === search) ||
+    (candidate.label && candidate.label.toLowerCase() === search) ||
+    (candidate.label && candidate.label.toLowerCase().includes(search)) ||
+    (candidate.label && search.includes(candidate.label.toLowerCase()))
+  );
+  if (direct) return direct;
+
+  // 2. Multilingual semantic concept matching (e.g. "दूरभाष" / "फोन" -> "Telephone Number")
+  const searchConcept = conceptForText(targetIdOrName);
+  if (searchConcept) {
+    const conceptMatch = fields.find((candidate) => {
+      const candidateConcept =
+        conceptForText(candidate.label || "") ||
+        conceptForText(candidate.name || "") ||
+        conceptForText(candidate.fieldIdentifier || "");
+      return candidateConcept === searchConcept;
+    });
+    if (conceptMatch) return conceptMatch;
+  }
+
+  return undefined;
+}
+
+function resolveMultilingualFieldValue(field: AgentContext["formTask"]["detectedFields"][number], rawValue: unknown): unknown {
+  if (field.options && Array.isArray(field.options) && field.options.length > 0) {
+    const matchRes = matchOption(rawValue, field.options as FormOption[]);
+    if (matchRes.matched && matchRes.option) {
+      return matchRes.option.value;
+    }
+  }
+  return rawValue;
+}
+
 const fieldValueTool: AgentTool = {
   definition: {
     name: "propose_field_value",
@@ -106,18 +150,11 @@ const fieldValueTool: AgentTool = {
     if (input.proposals && input.proposals.length > 0) {
       const results = [];
       for (const proposal of input.proposals) {
-        const search = proposal.fieldId.toLowerCase();
-        const field = context.formTask.detectedFields.find((candidate) =>
-          candidate.id === proposal.fieldId ||
-          (candidate.fieldIdentifier && candidate.fieldIdentifier.toLowerCase() === search) ||
-          (candidate.name && candidate.name.toLowerCase() === search) ||
-          (candidate.label && candidate.label.toLowerCase() === search) ||
-          (candidate.label && candidate.label.toLowerCase().includes(search)) ||
-          (candidate.label && search.includes(candidate.label.toLowerCase()))
-        );
+        const field = findTargetField(proposal.fieldId, context.formTask.detectedFields);
         if (!field) continue;
+        const resolvedValue = resolveMultilingualFieldValue(field, proposal.value);
         const res = await setFieldValue(userId, input.taskId, field.id, {
-          value: proposal.value as never,
+          value: resolvedValue as never,
           source: proposal.source,
           confidence: proposal.confidence,
         });
@@ -127,7 +164,7 @@ const fieldValueTool: AgentTool = {
           fieldIdentifier: field.fieldIdentifier,
           label: field.label,
           inputType: field.inputType,
-          value: proposal.value,
+          value: resolvedValue,
           status: res.status,
           redacted: field.inputType.toLowerCase() === "password",
         });
@@ -140,24 +177,17 @@ const fieldValueTool: AgentTool = {
       throw new Error("Either proposals or fieldId, value, and source are required");
     }
 
-    const search = input.fieldId.toLowerCase();
-    const field = context.formTask.detectedFields.find((candidate) =>
-      candidate.id === input.fieldId ||
-      (candidate.fieldIdentifier && candidate.fieldIdentifier.toLowerCase() === search) ||
-      (candidate.name && candidate.name.toLowerCase() === search) ||
-      (candidate.label && candidate.label.toLowerCase() === search) ||
-      (candidate.label && candidate.label.toLowerCase().includes(search)) ||
-      (candidate.label && search.includes(candidate.label.toLowerCase()))
-    );
+    const field = findTargetField(input.fieldId, context.formTask.detectedFields);
     if (!field) throw new Error("Field is not part of the selected task");
-    const result = await setFieldValue(userId, input.taskId, field.id, { value: input.value as never, source: input.source, confidence: input.confidence });
+    const resolvedValue = resolveMultilingualFieldValue(field, input.value);
+    const result = await setFieldValue(userId, input.taskId, field.id, { value: resolvedValue as never, source: input.source, confidence: input.confidence });
     return {
       id: result.id,
       fieldId: field.id,
       fieldIdentifier: field.fieldIdentifier,
       label: field.label,
       inputType: field.inputType,
-      value: input.value,
+      value: resolvedValue,
       status: result.status,
       executionStatus: result.executionStatus,
       redacted: field.inputType.toLowerCase() === "password",

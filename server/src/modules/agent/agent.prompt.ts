@@ -1,5 +1,6 @@
 import type { AgentContext } from "../context/context.types";
 import type { LLMToolDefinition } from "../llm/llm.types";
+import { detectConversationLanguage, type ConversationLanguage } from "./language-detector";
 
 export function projectContextForAgent(context: AgentContext) {
   return {
@@ -37,25 +38,45 @@ export function systemPrompt(context: AgentContext, tools: LLMToolDefinition[]):
     ? tools.map((t) => ({ name: t.name, description: t.description }))
     : [];
 
-  const rawLang = (context.request.currentUserMessage.language || context.user?.preferredLanguage || "en").toLowerCase();
-  const authoritativeLanguage =
-    rawLang.startsWith("hi") || rawLang === "hindi"
-      ? "hi"
-      : rawLang.startsWith("mr") || rawLang === "marathi"
-        ? "mr"
-        : rawLang.includes("hinglish") || rawLang === "hi-en"
-          ? "hinglish"
-          : "en";
+  const messageContent = context.request.currentUserMessage.content || "";
+  const authoritativeLanguage: ConversationLanguage = detectConversationLanguage(
+    messageContent,
+    context.request.currentUserMessage.language || context.user?.preferredLanguage || "en",
+  );
 
   let languageDirective = "";
   if (authoritativeLanguage === "hi") {
-    languageDirective = "STRICT AUTHORITATIVE LANGUAGE — HINDI: The user's selected language is HINDI. You MUST speak, explain, ask, and confirm EXCLUSIVELY in natural Hindi using standard Devanagari script (e.g. 'मैंने आपका नाम आदर्श झा भर दिया है।'). Never reply in English. Keep proper names, email addresses, and phone numbers in their original form within your Hindi sentences. Do not translate the user's recognized words unnecessarily.";
+    languageDirective = [
+      "CONVERSATION LANGUAGE POLICY — STRICT HINDI:",
+      "The user's current message has been detected as HINDI (hi).",
+      "You MUST respond, explain, ask follow-up questions, and confirm EXCLUSIVELY in natural Hindi using standard Devanagari script (e.g. 'मैंने आपका नाम आदर्श झा भर दिया है।', 'आपका टेलीफोन नंबर क्या है?').",
+      "NEVER reply in English simply because form labels or webpage elements are in English.",
+      "Translate form field concepts and internal tool outputs into natural Hindi.",
+      "Keep proper names, email addresses, and phone numbers in their original format within your Hindi sentences.",
+    ].join(" ");
   } else if (authoritativeLanguage === "mr") {
-    languageDirective = "STRICT AUTHORITATIVE LANGUAGE — MARATHI: The user's selected language is MARATHI. You MUST speak, explain, ask, and confirm EXCLUSIVELY in natural Marathi using standard Devanagari script (e.g. 'मी तुमचे नाव आदर्श झा भरले आहे.'). Never reply in English or Hindi. Keep proper names, email addresses, and phone numbers intact.";
+    languageDirective = [
+      "CONVERSATION LANGUAGE POLICY — STRICT MARATHI:",
+      "The user's current message has been detected as MARATHI (mr).",
+      "You MUST respond, explain, ask follow-up questions, and confirm EXCLUSIVELY in natural Marathi using standard Devanagari script (e.g. 'मी तुमचे नाव आदर्श झा भरले आहे.', 'तुमचा संपर्क क्रमांक काय आहे?').",
+      "NEVER reply in English or Hindi simply because the active webpage is in English.",
+      "Translate form field concepts and internal tool outputs into natural Marathi.",
+      "Keep proper names, email addresses, and phone numbers in their original format within your Marathi sentences.",
+    ].join(" ");
   } else if (authoritativeLanguage === "hinglish") {
-    languageDirective = "STRICT AUTHORITATIVE LANGUAGE — HINGLISH: The user's selected language is HINGLISH. Communicate in a natural, friendly mix of Hindi and English in Latin script (e.g. 'Maine name field mein Adarsh Jha fill kar diya hai. Ab email aur phone number pending hain.'). Do not force artificial translations of common English words.";
+    languageDirective = [
+      "CONVERSATION LANGUAGE POLICY — STRICT HINGLISH:",
+      "The user's current message has been detected as HINGLISH (hinglish).",
+      "You MUST respond in a natural, friendly mix of Hindi and English in Latin script (e.g. 'Maine name field mein Adarsh Jha fill kar diya hai. Ab phone number bata dijiye.').",
+      "Do not reply in formal Devanagari script or pure formal English.",
+      "Ask any follow-up questions in natural conversational Hinglish.",
+    ].join(" ");
   } else {
-    languageDirective = "STRICT AUTHORITATIVE LANGUAGE — ENGLISH: The user's selected language is ENGLISH. Communicate in natural, clear, professional English.";
+    languageDirective = [
+      "CONVERSATION LANGUAGE POLICY — ENGLISH:",
+      "The user's current message has been detected as ENGLISH (en).",
+      "Communicate in natural, clear, professional English.",
+    ].join(" ");
   }
 
   return [
@@ -85,9 +106,10 @@ export function systemPrompt(context: AgentContext, tools: LLMToolDefinition[]):
     "When no tool is needed, return a JSON object with exactly these fields: intent { primary, secondary, confidence }, language { detected, responseLanguage }, decision { type, reason }, toolCalls, and responseDraft.",
     "For a normal conversational reply, use decision.type respond, toolCalls [], and put the user-facing reply in responseDraft. Never use a top-level response field.",
     "The output JSON must use intent.primary as one of the declared intent enum values, intent.secondary as an array of zero or more declared intent enum values, and intent.confidence as a number from 0 to 1.",
-    'Required shape example: {"intent":{"primary":"GENERAL_QUESTION","secondary":[],"confidence":0.9},"language":{"detected":"en","responseLanguage":"en"},"decision":{"type":"respond"},"toolCalls":[],"responseDraft":"..."}',
+    `Required shape example: {"intent":{"primary":"GENERAL_QUESTION","secondary":[],"confidence":0.9},"language":{"detected":"${authoritativeLanguage}","responseLanguage":"${authoritativeLanguage}"},"decision":{"type":"respond"},"toolCalls":[],"responseDraft":"..."}`,
     "Do not move confidence outside intent and do not replace intent.secondary with a string.",
     "CRITICAL: When you are responding to the user without calling a tool, you MUST ALWAYS output valid JSON with `responseDraft`. NEVER output raw conversational prose outside JSON.",
+    `ABSOLUTE LANGUAGE ENFORCEMENT: The user's current message is in ${authoritativeLanguage.toUpperCase()}. Your output JSON fields MUST be: "language": {"detected": "${authoritativeLanguage}", "responseLanguage": "${authoritativeLanguage}"}. Your "responseDraft" MUST be written in ${authoritativeLanguage === "hi" ? "HINDI using standard Devanagari script (e.g. 'धन्यवाद! मैंने राज्य भर दिया है।')" : authoritativeLanguage === "mr" ? "MARATHI using standard Devanagari script" : authoritativeLanguage === "hinglish" ? "HINGLISH in Latin script" : "ENGLISH"}. You are strictly FORBIDDEN from responding in English when the user speaks in Hindi, Marathi, or Hinglish, regardless of what language previous messages were in or what language the form fields are in.`,
     `Context: ${JSON.stringify(projectContextForAgent(context))}`,
     `Available tools: ${JSON.stringify(toolsSummary)}`,
   ].join("\n");

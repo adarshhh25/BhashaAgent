@@ -70,6 +70,20 @@ export function parseAgentOutput(value: unknown) {
     if (!p.language || typeof p.language !== "object") {
       p.language = { detected: "en", responseLanguage: "en" };
     }
+    // Safeguard: unwrap nested JSON in responseDraft so raw JSON never leaks into the user chat UI
+    if (typeof p.responseDraft === "string" && p.responseDraft.trim().startsWith("{")) {
+      try {
+        const nested = JSON.parse(p.responseDraft.trim());
+        if (nested.responseDraft && typeof nested.responseDraft === "string") {
+          p.responseDraft = nested.responseDraft;
+        }
+      } catch {
+        const match = p.responseDraft.match(/"responseDraft"\s*:\s*"((?:[^"\\]|\\.)*)"?/);
+        if (match && match[1]) {
+          p.responseDraft = match[1].replace(/\\n/g, "\n").replace(/\\"/g, '"');
+        }
+      }
+    }
   }
 
   return outputSchema.parse(parsed);

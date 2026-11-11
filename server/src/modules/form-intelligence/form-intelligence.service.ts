@@ -26,12 +26,36 @@ function conversationCandidates(
     const isCorrection = /\b(?:actually|correction|correct(?:ion)?|i meant|instead)\b/i.test(content);
     if (isCorrection) candidates.length = 0;
     let value: string | undefined;
-    if (fieldConcept === "email") value = content.match(/[^\s,;]+@[^\s,;]+\.[^\s,;]+/)?.[0];
-    if (fieldConcept === "phone") value = content.match(/(?:\+?\d[\d\s()-]{7,}\d)/)?.[0].trim();
-    if (fieldConcept === "full_name") value = content.match(/(?:my name is|name is)\s+([^.!?]+)/i)?.[1]?.trim();
-    if (fieldConcept === "graduation_year") value = content.match(/\b(?:19|20)\d{2}\b/)?.[0];
+    if (fieldConcept === "email") {
+      value = content.match(/[^\s,;]+@[^\s,;]+\.[^\s,;]+/)?.[0];
+    }
+    if (fieldConcept === "phone") {
+      value = content.match(/(?:\+?\d[\d\s()-]{7,}\d)/)?.[0].trim();
+    }
+    if (fieldConcept === "full_name") {
+      value =
+        content.match(/(?:my name is|name is)\s+([^.!?]+)/i)?.[1]?.trim() ||
+        content.match(/(?:मेरा नाम|नाम)\s*(?:है)?\s*([^\s.!?।]+(?:\s+[^\s.!?।]+)?)/i)?.[1]?.trim() ||
+        content.match(/(?:माझे नाव|नाव)\s*([^\s.!?।]+(?:\s+[^\s.!?।]+)?)\s*(?:आहे)?/i)?.[1]?.trim() ||
+        content.match(/(?:mera naam|naam hai|naam)\s*(?:is|hai)?\s*([^\s.!?]+(?:\s+[^\s.!?]+)?)/i)?.[1]?.trim();
+    }
+    if (fieldConcept === "state") {
+      const stateMatch = content.match(/(?:महाराष्ट्र|गुजरात|राजस्थान|कर्नाटक|दिल्ली|maharashtra|gujarat|rajasthan|karnataka|delhi|madhya pradesh|uttar pradesh)/i);
+      if (stateMatch) value = stateMatch[0].trim();
+    }
+    if (fieldConcept === "district") {
+      const distMatch = content.match(/(?:ठाणे|पुणे|मुंबई|नाशिक|नागपूर|thane|pune|mumbai|nashik|nagpur)/i);
+      if (distMatch) value = distMatch[0].trim();
+    }
+    if (fieldConcept === "gender") {
+      const genderMatch = content.match(/(?:पुरुष|महिला|स्त्री|अन्य|male|female|other)/i);
+      if (genderMatch) value = genderMatch[0].trim();
+    }
+    if (fieldConcept === "graduation_year") {
+      value = content.match(/\b(?:19|20)\d{2}\b/)?.[0];
+    }
     if (fieldConcept === "highest_qualification") {
-      value = content.match(/(?:qualification|degree|education)\s*(?:is|:|-)?\s*(bachelor(?:'s)?|master(?:'s)?|ph\.?d|diploma|b\.?e\.?|b\.?tech|m\.?e\.?|m\.?tech)[^.!?]*/i)?.[1]?.trim();
+      value = content.match(/(?:qualification|degree|education|पात्रता|पदवी|योग्यता)\s*(?:is|:|-)?\s*(bachelor(?:'s)?|master(?:'s)?|ph\.?d|diploma|b\.?e\.?|b\.?tech|m\.?e\.?|m\.?tech|स्नातक|पदवी|पदव्युत्तर)[^.!?]*/i)?.[1]?.trim();
     }
     if (value) {
       candidates.push({
