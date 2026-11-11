@@ -1,35 +1,49 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
+  ChevronLeft,
+  ChevronDown,
   User,
-  Mail,
-  Globe,
   KeyRound,
+  Lock,
+  Eye,
+  EyeOff,
   LogOut,
-  ShieldAlert,
   Trash2,
   Loader2,
   CheckCircle2,
-  ArrowLeft,
+  AlertCircle,
 } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
-import { PasswordField } from '../components/PasswordField';
-import { AuthError } from '../components/AuthError';
 import { ApiError } from '../../../services/api/api-errors';
 import SidePanelLayout from '../../../layouts/SidePanelLayout';
 
-const LANGUAGES = [
+const LANGUAGE_OPTIONS = [
   { code: 'en', label: 'English' },
-  { code: 'hi', label: 'Hindi (हिन्दी)' },
-  { code: 'te', label: 'Telugu (తెలుగు)' },
-  { code: 'ta', label: 'Tamil (தமிழ்)' },
-  { code: 'bn', label: 'Bengali (বাংলা)' },
-  { code: 'mr', label: 'Marathi (मराठी)' },
-  { code: 'gu', label: 'Gujarati (ગુજરાતી)' },
-  { code: 'kn', label: 'Kannada (ಕನ್ನಡ)' },
-  { code: 'ml', label: 'Malayalam (മലയാളം)' },
-  { code: 'pa', label: 'Punjabi (ਪੰਜਾਬੀ)' },
+  { code: 'hi', label: 'Hindi' },
+  { code: 'mr', label: 'Marathi' },
+  { code: 'hinglish', label: 'Hinglish' },
 ];
+
+function formatRelativeTime(dateStr?: string | null): string {
+  if (!dateStr) return 'Recently';
+  try {
+    const d = new Date(dateStr);
+    const now = new Date();
+    const diffMs = now.getTime() - d.getTime();
+    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+    if (diffDays < 1) return 'today';
+    if (diffDays === 1) return 'yesterday';
+    if (diffDays < 30) return `${diffDays} days ago`;
+    const diffMonths = Math.floor(diffDays / 30);
+    if (diffMonths === 1) return '1 month ago';
+    if (diffMonths < 12) return `${diffMonths} months ago`;
+    const diffYears = Math.floor(diffDays / 365);
+    return `${diffYears} year${diffYears > 1 ? 's' : ''} ago`;
+  } catch {
+    return 'Recently';
+  }
+}
 
 export default function AccountPage() {
   const navigate = useNavigate();
@@ -42,18 +56,22 @@ export default function AccountPage() {
   const [profileSuccess, setProfileSuccess] = useState<string | null>(null);
   const [profileError, setProfileError] = useState<string | null>(null);
 
-  // Password change state
+  // Password & Security expansion state
   const [showPasswordSection, setShowPasswordSection] = useState(false);
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmNewPassword, setConfirmNewPassword] = useState('');
+  const [showCurrentPassword, setShowCurrentPassword] = useState(false);
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [isChangingPassword, setIsChangingPassword] = useState(false);
   const [passwordError, setPasswordError] = useState<string | null>(null);
+  const [passwordSuccess, setPasswordSuccess] = useState<string | null>(null);
 
-  // Delete account state
+  // Delete account confirmation modal state
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [deletePassword, setDeletePassword] = useState('');
-  const [deleteConfirmation, setDeleteConfirmation] = useState('');
+  const [showDeletePassword, setShowDeletePassword] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
@@ -87,6 +105,7 @@ export default function AccountPage() {
   const handleChangePassword = async (e: React.FormEvent) => {
     e.preventDefault();
     setPasswordError(null);
+    setPasswordSuccess(null);
 
     if (!currentPassword) {
       setPasswordError('Please enter your current password');
@@ -104,7 +123,7 @@ export default function AccountPage() {
     setIsChangingPassword(true);
     try {
       await changePassword({ currentPassword, newPassword });
-      // Password change revokes all tokens; user redirected to login
+      // Password change revokes existing sessions; navigate to login
       navigate('/login', { replace: true });
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
@@ -116,16 +135,10 @@ export default function AccountPage() {
     }
   };
 
-  const handleDeleteAccount = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleConfirmDeleteAccount = async () => {
     setDeleteError(null);
-
-    if (deleteConfirmation !== 'DELETE') {
-      setDeleteError('Please type DELETE in capital letters to confirm');
-      return;
-    }
     if (!deletePassword) {
-      setDeleteError('Current password is required');
+      setDeleteError('Please enter your current password to confirm');
       return;
     }
 
@@ -154,7 +167,6 @@ export default function AccountPage() {
   };
 
   const handleLogoutAll = async () => {
-    if (!window.confirm('Are you sure you want to log out from all devices?')) return;
     setIsLoggingOutAll(true);
     try {
       await logoutAll();
@@ -166,254 +178,400 @@ export default function AccountPage() {
 
   return (
     <SidePanelLayout>
-      <div className="flex flex-col gap-4 p-4 max-w-lg mx-auto w-full">
-        {/* Navigation header */}
-        <div className="flex items-center justify-between pb-2 border-b border-divider">
+      <div className="flex flex-col min-h-screen bg-[#F7F6F1]">
+        {/* Navigation Header (Screenshot 3 & Screenshot 1 top) */}
+        <header className="h-12 border-b border-divider/60 bg-[#F7F6F1] px-4 flex items-center justify-between shrink-0 sticky top-0 z-20">
           <button
             type="button"
             onClick={() => navigate('/')}
-            className="flex items-center gap-1.5 text-xs text-text-secondary hover:text-text-primary transition-colors focus:outline-none"
+            className="flex items-center gap-1.5 text-xs text-[#7B8278] hover:text-[#102A24] font-medium transition-colors focus:outline-none"
           >
-            <ArrowLeft className="w-4 h-4" />
+            <ChevronLeft className="w-4 h-4" />
             <span>Back to Assistant</span>
           </button>
-          <span className="text-xs font-semibold text-text-primary">Account</span>
-        </div>
+          <h1 className="text-xs sm:text-sm font-bold text-[#102A24]">Account</h1>
+        </header>
 
-        {/* Profile Card */}
-        <div className="bg-card rounded-lg border border-divider p-4 flex flex-col gap-3">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-full bg-accent/10 flex items-center justify-center text-accent">
-              <User className="w-5 h-5" strokeWidth={1.75} />
+        {/* Main Content Area */}
+        <main className="flex-1 p-3.5 sm:p-4 max-w-md mx-auto w-full flex flex-col gap-3.5">
+          {/* Profile Feedback Notifications */}
+          {profileSuccess && (
+            <div className="p-2.5 rounded-xl bg-success/10 border border-success/30 text-success text-xs flex items-center gap-2 animate-in fade-in">
+              <CheckCircle2 className="w-4 h-4 shrink-0" />
+              <span>{profileSuccess}</span>
             </div>
-            <div>
-              <h2 className="text-sm font-semibold text-text-primary">{user?.fullName}</h2>
-              <div className="flex items-center gap-1 text-xs text-text-secondary">
-                <Mail className="w-3 h-3 text-text-placeholder" />
-                <span>{user?.email}</span>
+          )}
+          {profileError && (
+            <div className="p-2.5 rounded-xl bg-danger/10 border border-danger/30 text-danger text-xs flex items-center gap-2 animate-in fade-in">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>{profileError}</span>
+            </div>
+          )}
+
+          {/* Section 1: Profile Information Card (Screenshot 3) */}
+          <div className="bg-card border border-divider rounded-2xl p-4 shadow-2xs flex flex-col gap-3.5">
+            {/* Identity top section */}
+            <div className="flex items-center gap-3">
+              <div className="w-12 h-12 rounded-full bg-[#DCE7DC] flex items-center justify-center text-[#17483A] shrink-0">
+                <User className="w-6 h-6 stroke-[1.75]" />
+              </div>
+              <div className="min-w-0">
+                <h2 className="text-sm font-bold text-[#102A24] truncate">
+                  {user?.fullName || 'User'}
+                </h2>
+                <p className="text-xs text-[#7B8278] truncate mt-0.5">
+                  {user?.email}
+                </p>
               </div>
             </div>
-          </div>
 
-          <form onSubmit={handleUpdateProfile} className="flex flex-col gap-2.5 mt-2 pt-3 border-t border-divider">
-            <AuthError message={profileError} />
-            {profileSuccess && (
-              <div className="flex items-center gap-2 p-2 rounded bg-[#E8F8EC] text-success text-xs">
-                <CheckCircle2 className="w-3.5 h-3.5" />
-                <span>{profileSuccess}</span>
-              </div>
-            )}
-
-            <div className="flex flex-col gap-1">
-              <label htmlFor="acc-name" className="text-xs font-medium text-text-primary">
-                Full name
-              </label>
-              <input
-                id="acc-name"
-                type="text"
-                value={fullName}
-                onChange={(e) => setFullName(e.target.value)}
-                disabled={isUpdatingProfile}
-                className="h-8 px-2.5 bg-input-bg border border-input-border rounded text-xs text-text-primary focus:bg-white focus:outline-none focus:ring-1 focus:ring-accent"
-              />
-            </div>
-
-            <div className="flex flex-col gap-1">
-              <label htmlFor="acc-lang" className="text-xs font-medium text-text-primary">
-                Primary language
-              </label>
-              <div className="relative flex items-center">
-                <div className="absolute left-2.5 text-text-placeholder pointer-events-none">
-                  <Globe className="w-3.5 h-3.5" />
-                </div>
-                <select
-                  id="acc-lang"
-                  value={preferredLanguage}
-                  onChange={(e) => setPreferredLanguage(e.target.value)}
+            {/* Profile fields form */}
+            <form onSubmit={handleUpdateProfile} className="flex flex-col gap-3 pt-3 border-t border-divider/60">
+              <div className="flex flex-col gap-1">
+                <label htmlFor="acc-fullname" className="text-xs font-semibold text-[#102A24]">
+                  Full name
+                </label>
+                <input
+                  id="acc-fullname"
+                  type="text"
+                  value={fullName}
+                  onChange={(e) => setFullName(e.target.value)}
                   disabled={isUpdatingProfile}
-                  className="w-full h-8 pl-8 pr-2.5 bg-input-bg border border-input-border rounded text-xs text-text-primary focus:bg-white focus:outline-none focus:ring-1 focus:ring-accent"
-                >
-                  {LANGUAGES.map((l) => (
-                    <option key={l.code} value={l.code}>
-                      {l.label}
-                    </option>
-                  ))}
-                </select>
+                  placeholder="Your full name"
+                  className="w-full h-9 px-3 rounded-xl bg-input-bg border border-input-border text-xs text-[#102A24] focus:outline-none focus:border-[#102A24] focus:ring-1 focus:ring-[#102A24] transition-all"
+                />
               </div>
-            </div>
 
-            <button
-              type="submit"
-              disabled={isUpdatingProfile}
-              className="self-end mt-1 h-7 px-3 rounded bg-accent text-white text-xs font-medium hover:bg-accent-hover transition-colors flex items-center gap-1.5 disabled:opacity-50"
-            >
-              {isUpdatingProfile ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
-              <span>Save Changes</span>
-            </button>
-          </form>
-        </div>
-
-        {/* Security / Password Card */}
-        <div className="bg-card rounded-lg border border-divider p-4 flex flex-col gap-3">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <KeyRound className="w-4 h-4 text-accent" strokeWidth={1.75} />
-              <h3 className="text-xs font-semibold text-text-primary">Password & Security</h3>
-            </div>
-            <button
-              type="button"
-              onClick={() => setShowPasswordSection((p) => !p)}
-              className="text-xs text-accent hover:underline focus:outline-none"
-            >
-              {showPasswordSection ? 'Cancel' : 'Change password'}
-            </button>
-          </div>
-
-          {showPasswordSection && (
-            <form onSubmit={handleChangePassword} className="flex flex-col gap-2.5 pt-2 border-t border-divider">
-              <AuthError message={passwordError} />
-
-              <p className="text-[11px] text-text-secondary">
-                Changing your password will sign you out of all devices.
-              </p>
-
-              <PasswordField
-                id="acc-current-pw"
-                name="currentPassword"
-                value={currentPassword}
-                onChange={(e) => setCurrentPassword(e.target.value)}
-                label="Current password"
-                disabled={isChangingPassword}
-              />
-
-              <PasswordField
-                id="acc-new-pw"
-                name="newPassword"
-                value={newPassword}
-                onChange={(e) => setNewPassword(e.target.value)}
-                label="New password"
-                hint="Min 12 characters"
-                disabled={isChangingPassword}
-                autoComplete="new-password"
-              />
-
-              <PasswordField
-                id="acc-confirm-new-pw"
-                name="confirmNewPassword"
-                value={confirmNewPassword}
-                onChange={(e) => setConfirmNewPassword(e.target.value)}
-                label="Confirm new password"
-                disabled={isChangingPassword}
-                autoComplete="new-password"
-              />
+              <div className="flex flex-col gap-1">
+                <label htmlFor="acc-lang" className="text-xs font-semibold text-[#102A24]">
+                  Primary language
+                </label>
+                <div className="relative flex items-center">
+                  <select
+                    id="acc-lang"
+                    value={preferredLanguage}
+                    onChange={(e) => setPreferredLanguage(e.target.value)}
+                    disabled={isUpdatingProfile}
+                    className="w-full h-9 px-3 pr-8 rounded-xl bg-input-bg border border-input-border text-xs text-[#102A24] appearance-none focus:outline-none focus:border-[#102A24] focus:ring-1 focus:ring-[#102A24] transition-all cursor-pointer"
+                  >
+                    {LANGUAGE_OPTIONS.map((l) => (
+                      <option key={l.code} value={l.code}>
+                        {l.label}
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDown className="w-4 h-4 text-[#7B8278] pointer-events-none absolute right-3" />
+                </div>
+              </div>
 
               <button
                 type="submit"
-                disabled={isChangingPassword}
-                className="self-end mt-1 h-7 px-3 rounded bg-accent text-white text-xs font-medium hover:bg-accent-hover transition-colors flex items-center gap-1.5 disabled:opacity-50"
+                disabled={isUpdatingProfile}
+                className="self-end mt-1 h-8 px-4 rounded-xl bg-[#102A24] hover:bg-[#17483A] text-white text-xs font-semibold shadow-2xs transition-colors flex items-center gap-1.5 disabled:opacity-50"
               >
-                {isChangingPassword ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
-                <span>Update Password</span>
+                {isUpdatingProfile ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
+                <span>Save Changes</span>
               </button>
             </form>
-          )}
-        </div>
-
-        {/* Sessions & Logout Card */}
-        <div className="bg-card rounded-lg border border-divider p-4 flex flex-col gap-3">
-          <h3 className="text-xs font-semibold text-text-primary">Sessions</h3>
-
-          <div className="flex flex-col gap-2">
-            <button
-              type="button"
-              onClick={handleLogout}
-              disabled={isLoggingOut || isLoggingOutAll}
-              className="w-full h-8 px-3 rounded border border-divider bg-page-bg text-text-primary text-xs font-medium hover:bg-white transition-colors flex items-center justify-center gap-1.5 disabled:opacity-50"
-            >
-              {isLoggingOut ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <LogOut className="w-3.5 h-3.5 text-text-secondary" />}
-              <span>Sign Out</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={handleLogoutAll}
-              disabled={isLoggingOut || isLoggingOutAll}
-              className="w-full h-8 px-3 rounded border border-divider bg-page-bg text-text-secondary text-xs font-medium hover:text-error hover:bg-white transition-colors flex items-center justify-center gap-1.5 disabled:opacity-50"
-            >
-              {isLoggingOutAll ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ShieldAlert className="w-3.5 h-3.5" />}
-              <span>Sign Out of All Devices</span>
-            </button>
           </div>
-        </div>
 
-        {/* Danger Zone: Account Deletion */}
-        <div className="bg-card rounded-lg border border-[#FFD0D6] p-4 flex flex-col gap-2">
-          <h3 className="text-xs font-semibold text-error flex items-center gap-1.5">
-            <Trash2 className="w-3.5 h-3.5" />
-            <span>Danger Zone</span>
-          </h3>
-          <p className="text-[11px] text-text-secondary leading-relaxed">
-            Permanently delete your account, memories, form tasks, and conversation history. This cannot be undone.
-          </p>
+          {/* Section 2: Password & Security (Screenshot 3 Collapsed / Screenshot 2 Expanded) */}
+          {!showPasswordSection ? (
+            /* Collapsed State (Screenshot 3) */
+            <div className="bg-card border border-divider rounded-2xl p-3.5 shadow-2xs flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-[#EAF2EC] flex items-center justify-center text-[#17483A] shrink-0">
+                  <KeyRound className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-xs font-bold text-[#102A24]">Password & Security</h3>
+                  <p className="text-[11px] text-[#7B8278] mt-0.5">
+                    {user?.updatedAt ? `Updated ${formatRelativeTime(user.updatedAt)}` : 'Secure your account'}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowPasswordSection(true)}
+                className="h-7 px-3.5 rounded-lg bg-[#F7F6F1] border border-divider text-xs font-semibold text-[#102A24] hover:bg-white hover:border-[#102A24]/30 transition-colors"
+              >
+                Change
+              </button>
+            </div>
+          ) : (
+            /* Expanded State (Screenshot 2) */
+            <div className="bg-card border border-divider rounded-2xl p-4 shadow-2xs flex flex-col gap-3 animate-in fade-in duration-150">
+              {/* Header */}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <KeyRound className="w-4 h-4 text-[#102A24]" />
+                  <h3 className="text-xs font-bold text-[#102A24]">Password & Security</h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowPasswordSection(false);
+                    setPasswordError(null);
+                    setCurrentPassword('');
+                    setNewPassword('');
+                    setConfirmNewPassword('');
+                  }}
+                  className="text-xs font-semibold text-[#102A24] hover:underline"
+                >
+                  Cancel
+                </button>
+              </div>
 
-          {!showDeleteModal ? (
+              {/* Supporting info text */}
+              <p className="text-[11px] text-[#7B8278]">
+                Changing your password will sign you out of all devices.
+              </p>
+
+              {passwordError && (
+                <div className="p-2.5 rounded-xl bg-danger/10 border border-danger/20 text-danger text-xs">
+                  {passwordError}
+                </div>
+              )}
+              {passwordSuccess && (
+                <div className="p-2.5 rounded-xl bg-success/10 border border-success/20 text-success text-xs">
+                  {passwordSuccess}
+                </div>
+              )}
+
+              {/* Expanded Form Fields */}
+              <form onSubmit={handleChangePassword} className="flex flex-col gap-3 mt-0.5">
+                {/* Current password */}
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs font-semibold text-[#102A24]">Current password</label>
+                  <div className="relative flex items-center">
+                    <Lock className="w-3.5 h-3.5 text-[#7B8278] absolute left-3 pointer-events-none" />
+                    <input
+                      type={showCurrentPassword ? 'text' : 'password'}
+                      value={currentPassword}
+                      onChange={(e) => setCurrentPassword(e.target.value)}
+                      disabled={isChangingPassword}
+                      placeholder="••••••••••••"
+                      className="w-full h-9 pl-9 pr-9 rounded-xl bg-input-bg border border-input-border text-xs text-[#102A24] focus:outline-none focus:border-[#102A24] focus:ring-1 focus:ring-[#102A24] transition-all"
+                    />
+                    <button
+                      type="button"
+                      tabIndex={-1}
+                      onClick={() => setShowCurrentPassword((p) => !p)}
+                      className="absolute right-3 text-[#7B8278] hover:text-[#102A24]"
+                    >
+                      {showCurrentPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
+                </div>
+
+                {/* New password */}
+                <div className="flex flex-col gap-1">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-semibold text-[#102A24]">New password</label>
+                    <span className="text-[11px] text-[#7B8278]">Min 12 characters</span>
+                  </div>
+                  <div className="relative flex items-center">
+                    <Lock className="w-3.5 h-3.5 text-[#7B8278] absolute left-3 pointer-events-none" />
+                    <input
+                      type={showNewPassword ? 'text' : 'password'}
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      disabled={isChangingPassword}
+                      placeholder="At least 12 characters"
+                      className="w-full h-9 pl-9 pr-9 rounded-xl bg-input-bg border border-input-border text-xs text-[#102A24] focus:outline-none focus:border-[#102A24] focus:ring-1 focus:ring-[#102A24] transition-all"
+                    />
+                    <button
+                      type="button"
+                      tabIndex={-1}
+                      onClick={() => setShowNewPassword((p) => !p)}
+                      className="absolute right-3 text-[#7B8278] hover:text-[#102A24]"
+                    >
+                      {showNewPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Confirm new password */}
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs font-semibold text-[#102A24]">Confirm new password</label>
+                  <div className="relative flex items-center">
+                    <Lock className="w-3.5 h-3.5 text-[#7B8278] absolute left-3 pointer-events-none" />
+                    <input
+                      type={showConfirmPassword ? 'text' : 'password'}
+                      value={confirmNewPassword}
+                      onChange={(e) => setConfirmNewPassword(e.target.value)}
+                      disabled={isChangingPassword}
+                      placeholder="Re-enter new password"
+                      className="w-full h-9 pl-9 pr-9 rounded-xl bg-input-bg border border-input-border text-xs text-[#102A24] focus:outline-none focus:border-[#102A24] focus:ring-1 focus:ring-[#102A24] transition-all"
+                    />
+                    <button
+                      type="button"
+                      tabIndex={-1}
+                      onClick={() => setShowConfirmPassword((p) => !p)}
+                      className="absolute right-3 text-[#7B8278] hover:text-[#102A24]"
+                    >
+                      {showConfirmPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Update Password button */}
+                <button
+                  type="submit"
+                  disabled={isChangingPassword}
+                  className="self-end mt-1 h-8 px-4 rounded-xl bg-[#102A24] hover:bg-[#17483A] text-white text-xs font-semibold shadow-2xs transition-colors flex items-center gap-1.5 disabled:opacity-50"
+                >
+                  {isChangingPassword ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
+                  <span>Update Password</span>
+                </button>
+              </form>
+            </div>
+          )}
+
+          {/* Section 3: Sessions Card (Screenshot 3 & Screenshot 2 bottom) */}
+          <div className="bg-card border border-divider rounded-2xl p-4 shadow-2xs flex flex-col gap-2.5">
+            <div>
+              <h3 className="text-xs font-bold text-[#102A24]">Sessions</h3>
+              <p className="text-[11px] text-[#7B8278] mt-0.5">Manage your active sign-ins</p>
+            </div>
+
+            <div className="flex flex-col gap-2 mt-1">
+              <button
+                type="button"
+                onClick={handleLogout}
+                disabled={isLoggingOut || isLoggingOutAll}
+                className="w-full h-9 rounded-xl border border-divider bg-[#F7F6F1] text-xs font-semibold text-[#252923] hover:bg-white hover:border-[#252923]/30 transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                {isLoggingOut ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <LogOut className="w-3.5 h-3.5 text-[#252923]" />
+                )}
+                <span>Sign Out</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleLogoutAll}
+                disabled={isLoggingOut || isLoggingOutAll}
+                className="w-full h-9 rounded-xl border border-divider bg-[#F7F6F1] text-xs font-semibold text-[#252923] hover:bg-white hover:border-[#252923]/30 transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                {isLoggingOutAll ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : null}
+                <span>Sign Out of All Devices</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Section 4: Danger Zone (Screenshot 3) */}
+          <div className="bg-card border border-[#FFD0D6] rounded-2xl p-4 shadow-2xs flex flex-col gap-2">
+            <div className="flex items-center gap-1.5 text-[#E11D48]">
+              <Trash2 className="w-3.5 h-3.5" />
+              <h3 className="text-xs font-bold text-[#E11D48]">Danger Zone</h3>
+            </div>
+
+            <p className="text-[11px] text-[#7B8278] leading-relaxed">
+              Permanently delete your account, memories, form tasks, and conversation history. This cannot be undone.
+            </p>
+
             <button
               type="button"
-              onClick={() => setShowDeleteModal(true)}
-              className="self-start mt-1 h-7 px-2.5 rounded border border-[#FFD0D6] text-error text-xs font-medium hover:bg-[#FFF2F4] transition-colors"
+              onClick={() => {
+                setShowDeleteModal(true);
+                setDeleteError(null);
+                setDeletePassword('');
+              }}
+              className="self-start mt-1 h-8 px-3.5 rounded-xl border border-[#FFD0D6] text-[#E11D48] bg-white text-xs font-semibold hover:bg-red-50/50 transition-colors"
             >
               Delete Account
             </button>
-          ) : (
-            <form onSubmit={handleDeleteAccount} className="flex flex-col gap-2.5 pt-2 border-t border-[#FFD0D6]">
-              <AuthError message={deleteError} />
+          </div>
+        </main>
 
-              <p className="text-[11px] text-error font-medium">
-                Type <strong>DELETE</strong> to confirm permanent deletion:
+        {/* Modal: Delete Account Confirmation (Screenshot 1) */}
+        {showDeleteModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs animate-in fade-in duration-150">
+            <div
+              role="dialog"
+              aria-modal="true"
+              className="bg-card w-full max-w-[320px] rounded-3xl p-6 shadow-2xl flex flex-col items-center text-center gap-3 border border-divider/40 animate-in zoom-in-95 duration-150"
+            >
+              {/* Circular pale-red icon */}
+              <div className="w-12 h-12 rounded-full bg-[#FEE2E2]/70 flex items-center justify-center text-[#E11D48]">
+                <Trash2 className="w-6 h-6 stroke-[1.75]" />
+              </div>
+
+              {/* Heading */}
+              <h3 className="text-base font-bold text-[#102A24]">
+                Delete Account?
+              </h3>
+
+              {/* Description */}
+              <p className="text-xs text-[#7B8278] leading-relaxed max-w-[240px]">
+                All your synced linguistic settings, profile data, and AI memories will be permanently wiped.
               </p>
 
-              <input
-                type="text"
-                value={deleteConfirmation}
-                onChange={(e) => setDeleteConfirmation(e.target.value)}
-                placeholder="DELETE"
-                disabled={isDeleting}
-                className="h-8 px-2.5 bg-input-bg border border-input-border rounded text-xs text-text-primary focus:bg-white focus:outline-none focus:border-error"
-              />
+              {/* Password Verification Field (preserves backend security requirement) */}
+              <div className="w-full flex flex-col gap-1 mt-1 text-left">
+                <label className="text-[11px] font-semibold text-[#102A24]">
+                  Confirm with your password
+                </label>
+                <div className="relative flex items-center">
+                  <Lock className="w-3.5 h-3.5 text-[#7B8278] absolute left-3 pointer-events-none" />
+                  <input
+                    type={showDeletePassword ? 'text' : 'password'}
+                    value={deletePassword}
+                    onChange={(e) => setDeletePassword(e.target.value)}
+                    disabled={isDeleting}
+                    placeholder="Current password"
+                    className="w-full h-9 pl-9 pr-9 rounded-xl bg-input-bg border border-input-border text-xs text-[#102A24] focus:outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500"
+                  />
+                  <button
+                    type="button"
+                    tabIndex={-1}
+                    onClick={() => setShowDeletePassword((p) => !p)}
+                    className="absolute right-3 text-[#7B8278] hover:text-[#102A24]"
+                  >
+                    {showDeletePassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                  </button>
+                </div>
+              </div>
 
-              <PasswordField
-                id="del-pw"
-                name="deletePassword"
-                value={deletePassword}
-                onChange={(e) => setDeletePassword(e.target.value)}
-                label="Confirm with your password"
-                disabled={isDeleting}
-              />
+              {deleteError && (
+                <div className="w-full p-2.5 rounded-xl bg-red-50 border border-red-200 text-red-600 text-[11px] text-left">
+                  {deleteError}
+                </div>
+              )}
 
-              <div className="flex items-center gap-2 self-end mt-1">
+              {/* Actions */}
+              <div className="w-full flex flex-col gap-2 mt-2">
+                <button
+                  type="button"
+                  onClick={handleConfirmDeleteAccount}
+                  disabled={isDeleting || !deletePassword}
+                  className="w-full h-10 rounded-xl bg-[#E11D48] hover:bg-[#BE123C] text-white text-xs font-semibold transition-colors shadow-xs flex items-center justify-center gap-1.5 disabled:opacity-50"
+                >
+                  {isDeleting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
+                  <span>Permanently Delete Account</span>
+                </button>
+
                 <button
                   type="button"
                   onClick={() => {
                     setShowDeleteModal(false);
+                    setDeletePassword('');
                     setDeleteError(null);
                   }}
                   disabled={isDeleting}
-                  className="h-7 px-2.5 rounded border border-divider text-xs text-text-secondary hover:text-text-primary"
+                  className="w-full h-10 rounded-xl bg-[#F7F6F1] hover:bg-[#ECEAE3] text-[#252923] text-xs font-semibold transition-colors flex items-center justify-center"
                 >
                   Cancel
                 </button>
-                <button
-                  type="submit"
-                  disabled={isDeleting || deleteConfirmation !== 'DELETE' || !deletePassword}
-                  className="h-7 px-3 rounded bg-error text-white text-xs font-medium hover:bg-error/90 transition-colors flex items-center gap-1.5 disabled:opacity-50"
-                >
-                  {isDeleting ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
-                  <span>Permanently Delete</span>
-                </button>
               </div>
-            </form>
-          )}
-        </div>
+            </div>
+          </div>
+        )}
       </div>
     </SidePanelLayout>
   );

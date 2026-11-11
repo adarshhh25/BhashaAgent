@@ -27,7 +27,7 @@ export function DeleteMemoryDialog({
       await onConfirm(memory.id);
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to request memory deletion');
+      setError(err instanceof Error ? err.message : 'Failed to delete memory');
     } finally {
       setIsDeleting(false);
     }
@@ -46,32 +46,32 @@ export function DeleteMemoryDialog({
             <AlertTriangle className="w-5 h-5 stroke-[2]" />
           </div>
           <div>
-            <h3 id="delete-memory-title" className="text-sm font-semibold text-text-primary">
-              Delete Profile Memory
+            <h3 id="delete-memory-title" className="text-sm font-bold text-[#102A24]">
+              Delete Memory
             </h3>
-            <p className="text-xs text-text-secondary mt-0.5 leading-normal">
-              Are you sure you want to delete this memory? A deletion proposal will be created to finalize deletion.
+            <p className="text-xs text-text-secondary mt-1 leading-normal">
+              Are you sure you want to delete this profile memory? This will remove it from the assistant's context.
             </p>
           </div>
         </div>
 
         {error && (
-          <div className="p-2.5 rounded-lg bg-danger/10 border border-danger/20 text-danger text-xs">
+          <div className="p-2.5 rounded-xl bg-danger/10 border border-danger/20 text-danger text-xs">
             {error}
           </div>
         )}
 
         {/* Memory Details Snapshot */}
-        <div className="p-3 rounded-xl bg-page-bg border border-divider flex flex-col gap-1 text-xs">
-          <div className="flex items-center justify-between">
-            <span className="text-[10px] font-bold text-accent uppercase tracking-wider">
-              {memory.category}
+        <div className="p-3.5 rounded-xl bg-[#F7F6F1] border border-divider flex flex-col gap-1.5 text-xs">
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] font-semibold text-[#252923] uppercase tracking-wider px-2 py-0.5 rounded-full bg-[#ECEAE3]">
+              {memory.category.toLowerCase()}
             </span>
-            <span className="text-[11px] font-medium text-text-secondary capitalize">
+            <span className="font-bold text-[#102A24] capitalize truncate">
               {memory.key.replace(/_/g, ' ')}
             </span>
           </div>
-          <p className="font-semibold text-text-primary mt-1 break-words">
+          <p className="text-xs text-[#252923]/90 mt-1 break-words line-clamp-3">
             {typeof memory.value === 'string' ? memory.value : JSON.stringify(memory.value)}
           </p>
         </div>
@@ -82,7 +82,7 @@ export function DeleteMemoryDialog({
             type="button"
             onClick={onClose}
             disabled={isDeleting}
-            className="px-3 py-1.5 text-xs font-medium text-text-secondary hover:text-text-primary rounded-lg transition-colors"
+            className="px-3.5 py-2 text-xs font-medium text-text-secondary hover:text-text-primary rounded-xl transition-colors"
           >
             Cancel
           </button>
@@ -90,18 +90,17 @@ export function DeleteMemoryDialog({
             type="button"
             onClick={() => void handleConfirm()}
             disabled={isDeleting}
-            className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-medium bg-danger text-white rounded-lg hover:bg-danger/90 transition-all shadow-xs disabled:opacity-50"
+            className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold bg-danger text-white rounded-full hover:bg-danger/90 transition-all shadow-xs disabled:opacity-50"
           >
             {isDeleting ? (
               <Loader2 className="w-3.5 h-3.5 animate-spin" />
             ) : (
               <Trash2 className="w-3.5 h-3.5" />
             )}
-            <span>Confirm Delete</span>
+            <span>Delete</span>
           </button>
         </div>
       </div>
     </div>
   );
 }
-

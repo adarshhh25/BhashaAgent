@@ -27,15 +27,15 @@ export function CreateProposalModal({
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
-    const trimmedKey = key.trim().toLowerCase().replace(/\s+/g, '_');
+    const trimmedKey = key.trim();
     const trimmedVal = value.trim();
 
     if (!trimmedKey) {
-      setError('Key is required');
+      setError('Memory key or title is required');
       return;
     }
     if (!trimmedVal) {
-      setError('Value is required');
+      setError('Memory content is required');
       return;
     }
 
@@ -50,7 +50,7 @@ export function CreateProposalModal({
       });
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create memory proposal');
+      setError(err instanceof Error ? err.message : 'Failed to save memory');
     } finally {
       setIsSubmitting(false);
     }
@@ -64,9 +64,9 @@ export function CreateProposalModal({
         aria-labelledby="create-memory-title"
         className="bg-card w-full max-w-sm rounded-2xl border border-divider shadow-xl overflow-hidden animate-in fade-in zoom-in-95 duration-150"
       >
-        <div className="px-4 py-3 border-b border-divider flex items-center justify-between">
-          <h3 id="create-memory-title" className="text-xs font-semibold text-text-primary">
-            Add New Memory Proposal
+        <div className="px-5 py-3.5 border-b border-divider flex items-center justify-between">
+          <h3 id="create-memory-title" className="text-sm font-bold text-[#102A24]">
+            Add Memory
           </h3>
           <button
             type="button"
@@ -78,9 +78,9 @@ export function CreateProposalModal({
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="p-4 flex flex-col gap-3">
+        <form onSubmit={handleSubmit} className="p-5 flex flex-col gap-3.5">
           {error && (
-            <div className="p-2 rounded-lg bg-danger/10 border border-danger/20 text-danger text-xs">
+            <div className="p-2.5 rounded-xl bg-danger/10 border border-danger/20 text-danger text-xs">
               {error}
             </div>
           )}
@@ -96,11 +96,11 @@ export function CreateProposalModal({
               id="create-category"
               value={category}
               onChange={(e) => setCategory(e.target.value as MemoryCategory)}
-              className="w-full h-8 px-2 text-xs bg-input-bg border border-divider rounded-lg text-text-primary focus:outline-none focus:border-accent"
+              className="w-full h-9 px-3 text-xs bg-input-bg border border-divider rounded-xl text-text-primary focus:outline-none focus:border-[#102A24]"
             >
               {MEMORY_CATEGORIES.map((cat) => (
                 <option key={cat} value={cat}>
-                  {cat}
+                  {cat.charAt(0).toUpperCase() + cat.slice(1).toLowerCase()}
                 </option>
               ))}
             </select>
@@ -111,15 +111,15 @@ export function CreateProposalModal({
               htmlFor="create-key"
               className="text-[11px] font-medium text-text-secondary block mb-1"
             >
-              Fact Name / Key (e.g. current_city, employer)
+              Title / Key
             </label>
             <input
               id="create-key"
               type="text"
-              placeholder="e.g. highest_qualification"
+              placeholder="e.g. Explanation Style, Degree, Address..."
               value={key}
               onChange={(e) => setKey(e.target.value)}
-              className="w-full h-8 px-2.5 text-xs bg-input-bg border border-divider rounded-lg text-text-primary focus:outline-none focus:border-accent placeholder:text-text-placeholder"
+              className="w-full h-9 px-3 text-xs bg-input-bg border border-divider rounded-xl text-text-primary placeholder:text-text-placeholder focus:outline-none focus:border-[#102A24]"
             />
           </div>
 
@@ -128,42 +128,38 @@ export function CreateProposalModal({
               htmlFor="create-value"
               className="text-[11px] font-medium text-text-secondary block mb-1"
             >
-              Value (Supports English / हिन्दी / मराठी / Hinglish)
+              Content / Value
             </label>
             <textarea
               id="create-value"
-              rows={3}
-              placeholder="e.g. B.Tech Computer Science"
+              rows={4}
+              placeholder="Enter personal context, preference, or instructions..."
               value={value}
               onChange={(e) => setValue(e.target.value)}
-              className="w-full p-2.5 text-xs bg-input-bg border border-divider rounded-lg text-text-primary focus:outline-none focus:border-accent resize-none placeholder:text-text-placeholder"
+              className="w-full p-3 text-xs bg-input-bg border border-divider rounded-xl text-text-primary placeholder:text-text-placeholder focus:outline-none focus:border-[#102A24] resize-none"
             />
           </div>
-
-          <p className="text-[10px] text-text-placeholder leading-normal">
-            New memories are proposed first. You can immediately review and approve it under Pending Proposals.
-          </p>
 
           <div className="flex items-center justify-end gap-2 pt-2 border-t border-divider">
             <button
               type="button"
               onClick={onClose}
               disabled={isSubmitting}
-              className="px-3 py-1.5 text-xs font-medium text-text-secondary hover:text-text-primary rounded-lg transition-colors"
+              className="px-3.5 py-2 text-xs font-medium text-text-secondary hover:text-text-primary rounded-xl transition-colors"
             >
               Cancel
             </button>
             <button
               type="submit"
               disabled={isSubmitting}
-              className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-medium bg-accent text-white rounded-lg hover:bg-accent/90 transition-all shadow-xs disabled:opacity-50"
+              className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold bg-[#102A24] hover:bg-[#17483A] text-white rounded-full transition-all shadow-xs disabled:opacity-50"
             >
               {isSubmitting ? (
                 <Loader2 className="w-3.5 h-3.5 animate-spin" />
               ) : (
                 <Plus className="w-3.5 h-3.5" />
               )}
-              <span>Create Proposal</span>
+              <span>Save Memory</span>
             </button>
           </div>
         </form>
@@ -171,4 +167,3 @@ export function CreateProposalModal({
     </div>
   );
 }
-

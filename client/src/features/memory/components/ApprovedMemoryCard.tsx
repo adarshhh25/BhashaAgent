@@ -1,4 +1,4 @@
-import { Pencil, Trash2, Calendar } from 'lucide-react';
+import { Pencil, Trash2 } from 'lucide-react';
 import type { ProfileMemory } from '../types/memory.types';
 
 interface ApprovedMemoryCardProps {
@@ -19,18 +19,29 @@ function formatValue(value: unknown): string {
   }
 }
 
-function formatDate(dateStr?: string | null): string {
+function formatStitchDate(dateStr?: string | null): string {
   if (!dateStr) return '';
   try {
     const d = new Date(dateStr);
-    return d.toLocaleDateString(undefined, {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-    });
+    if (isNaN(d.getTime())) return '';
+    const day = String(d.getDate()).padStart(2, '0');
+    const month = d.toLocaleDateString('en-US', { month: 'short' });
+    const year = d.getFullYear();
+    return `${day} ${month} ${year}`;
   } catch {
     return '';
   }
+}
+
+function formatKey(key: string): string {
+  if (!key) return '';
+  return key
+    .replace(/_/g, ' ')
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .split(' ')
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
 }
 
 export function ApprovedMemoryCard({
@@ -40,23 +51,29 @@ export function ApprovedMemoryCard({
   isProcessing = false,
 }: ApprovedMemoryCardProps) {
   const formattedValue = formatValue(memory.value);
-  const formattedDate = formatDate(memory.approvedAt || memory.updatedAt || memory.createdAt);
+  const formattedDate = formatStitchDate(memory.updatedAt || memory.approvedAt || memory.createdAt);
+  const formattedTitle = formatKey(memory.key);
 
   return (
-    <div className="bg-card border border-divider rounded-xl p-3.5 shadow-2xs hover:border-divider/80 transition-all flex flex-col justify-between gap-2.5">
-      {/* Header: Category Badge & Actions */}
+    <div className="bg-card border border-divider rounded-2xl p-4 shadow-2xs hover:border-[#102A24]/30 transition-all flex flex-col gap-2.5">
+      {/* Top Row: Category Badge + Key/Title + Action Buttons */}
       <div className="flex items-center justify-between gap-2">
-        <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-accent/10 text-accent uppercase tracking-wider">
-          {memory.category}
-        </span>
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-[#ECEAE3] text-[#252923] shrink-0 capitalize">
+            {memory.category.toLowerCase()}
+          </span>
+          <h4 className="font-bold text-xs sm:text-sm text-[#102A24] truncate tracking-tight">
+            {formattedTitle}
+          </h4>
+        </div>
 
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1 shrink-0">
           <button
             type="button"
             onClick={() => onEdit(memory)}
             disabled={isProcessing}
             title="Edit memory"
-            className="p-1.5 rounded-lg text-text-secondary hover:text-text-primary hover:bg-page-bg transition-colors disabled:opacity-40"
+            className="p-1 rounded-md text-[#7B8278] hover:text-[#102A24] hover:bg-[#F0EDE6] transition-colors disabled:opacity-40"
           >
             <Pencil className="w-3.5 h-3.5" />
           </button>
@@ -65,31 +82,28 @@ export function ApprovedMemoryCard({
             onClick={() => onDelete(memory)}
             disabled={isProcessing}
             title="Delete memory"
-            className="p-1.5 rounded-lg text-text-secondary hover:text-danger hover:bg-page-bg transition-colors disabled:opacity-40"
+            className="p-1 rounded-md text-[#7B8278] hover:text-red-600 hover:bg-red-50 transition-colors disabled:opacity-40"
           >
             <Trash2 className="w-3.5 h-3.5" />
           </button>
         </div>
       </div>
 
-      {/* Key & Value */}
+      {/* Middle: Content */}
       <div className="min-w-0">
-        <span className="text-[11px] font-medium text-text-secondary block capitalize truncate">
-          {memory.key.replace(/_/g, ' ')}
-        </span>
-        <p className="text-xs font-semibold text-text-primary mt-0.5 break-words whitespace-pre-wrap">
+        <p className="text-xs sm:text-[13px] text-[#252923]/90 leading-relaxed break-words whitespace-pre-wrap">
           {formattedValue}
         </p>
       </div>
 
-      {/* Footer: Date */}
+      {/* Bottom: Hairline divider & Date */}
       {formattedDate && (
-        <div className="flex items-center gap-1.5 pt-1.5 border-t border-divider/60 text-[10px] text-text-placeholder">
-          <Calendar className="w-3 h-3" />
-          <span>Approved on {formattedDate}</span>
+        <div className="border-t border-divider/60 pt-2 mt-0.5">
+          <span className="text-[11px] font-normal text-[#7B8278]">
+            Updated {formattedDate}
+          </span>
         </div>
       )}
     </div>
   );
 }
-

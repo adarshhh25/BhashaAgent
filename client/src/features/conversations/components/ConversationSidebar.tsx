@@ -5,10 +5,8 @@ import {
   Search,
   X,
   MessageSquareDashed,
-  CircleUserRound,
   LogOut,
   Loader2,
-  Check,
 } from 'lucide-react';
 import type { Conversation } from '../types/conversation.types';
 import { ConversationListItem } from './ConversationListItem';
@@ -257,42 +255,20 @@ export function ConversationSidebar({
               </div>
             )}
 
-            {/* End of list state */}
-            {!hasMoreConversations && conversations.length > 0 && !debouncedSearchQuery && (
-              <div className="flex items-center justify-center gap-1.5 py-3 text-[10px] text-[#252923]/40 border-t border-[#E5E1D8]/50 mt-2">
-                <Check className="w-3 h-3 text-[#17483A]/60" />
-                <span>You&apos;re all caught up</span>
-              </div>
-            )}
           </>
         )}
       </div>
 
-      {/* 5. BOTTOM NAVIGATION FOOTER: Exactly Profile and Sign Out */}
-      <div className="p-2 border-t border-[#E5E1D8] flex items-center justify-between text-xs text-[#252923] bg-white shrink-0 gap-1.5">
-        {/* Profile Action */}
-        <button
-          type="button"
-          onClick={() => {
-            navigate('/account');
-            if (onClose) onClose();
-          }}
-          className="flex items-center gap-2 px-3 py-2 rounded-xl text-[#252923] hover:text-[#102A24] hover:bg-[#F7F6F1] transition-colors flex-1 min-w-0 font-medium cursor-pointer"
-          title="Profile and Account Settings"
-        >
-          <CircleUserRound className="w-4 h-4 text-[#17483A] shrink-0" />
-          <span className="truncate text-xs">Profile</span>
-        </button>
-
-        {/* Sign Out Action */}
+      {/* 5. BOTTOM NAVIGATION FOOTER: Full-width Sign Out */}
+      <div className="p-2 border-t border-[#E5E1D8] bg-white shrink-0 mt-auto">
         <button
           type="button"
           onClick={() => void handleSignOut()}
-          className="flex items-center gap-2 px-3 py-2 rounded-xl text-[#252923]/70 hover:text-red-600 hover:bg-red-50 transition-colors shrink-0 font-medium cursor-pointer"
+          className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl text-xs font-medium text-[#252923]/80 hover:text-red-600 hover:bg-red-50/80 transition-colors cursor-pointer"
           title="Sign Out"
         >
           <LogOut className="w-4 h-4 shrink-0" />
-          <span className="text-xs">Sign Out</span>
+          <span>Sign Out</span>
         </button>
       </div>
 

@@ -3,30 +3,31 @@ import { useNavigate } from 'react-router-dom';
 import {
   ArrowLeft,
   RotateCw,
-  BookmarkCheck,
+  Plus,
   Clock,
   CheckCircle2,
   AlertCircle,
 } from 'lucide-react';
 import { useMemories } from '../hooks/useMemories';
 import { useMemoryProposals } from '../hooks/useMemoryProposals';
-import { MemoryOverview } from './MemoryOverview';
 import { ApprovedMemoryList } from './ApprovedMemoryList';
 import { PendingProposalList } from './PendingProposalList';
 import { EditMemoryModal } from './EditMemoryModal';
 import { DeleteMemoryDialog } from './DeleteMemoryDialog';
 import { CreateProposalModal } from './CreateProposalModal';
+import { memoryService } from '../services/memory.service';
 import type {
   CreateProposalRequest,
   ProfileMemory,
   UpdateMemoryRequest,
 } from '../types/memory.types';
 
-type DashboardTab = 'APPROVED' | 'PENDING';
+type DashboardView = 'APPROVED' | 'PENDING';
 
 export function MemoryDashboard() {
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState<DashboardTab>('APPROVED');
+  const [activeView, setActiveView] = useState<DashboardView>('APPROVED');
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   const {
     memories,
@@ -40,8 +41,6 @@ export function MemoryDashboard() {
     page: memoryPage,
     setPage: setMemoryPage,
     fetchMemories,
-    editMemory,
-    deleteMemory,
   } = useMemories();
 
   const {
@@ -57,7 +56,6 @@ export function MemoryDashboard() {
     fetchProposals,
     approveProposal,
     rejectProposal,
-    createProposal,
   } = useMemoryProposals();
 
   // Modals state
@@ -79,11 +77,19 @@ export function MemoryDashboard() {
   };
 
   const handleRefreshAll = useCallback(async () => {
-    await Promise.all([fetchMemories(), fetchProposals()]);
-    showFeedback('success', 'Profile memory refreshed');
+    setIsRefreshing(true);
+    try {
+      await Promise.all([fetchMemories(), fetchProposals()]);
+      showFeedback('success', 'Profile memory refreshed');
+    } catch (err) {
+      showFeedback('error', 'Failed to refresh memories');
+    } finally {
+      setIsRefreshing(false);
+    }
   }, [fetchMemories, fetchProposals]);
 
-  const handleApprove = async (proposalId: string) => {
+  // AI-generated pending proposal review
+  const handleApproveProposal = async (proposalId: string) => {
     try {
       await approveProposal(proposalId);
       await fetchMemories();
@@ -93,7 +99,7 @@ export function MemoryDashboard() {
     }
   };
 
-  const handleReject = async (proposalId: string, reason?: string) => {
+  const handleRejectProposal = async (proposalId: string, reason?: string) => {
     try {
       await rejectProposal(proposalId, reason);
       showFeedback('success', 'Memory proposal rejected');
@@ -102,84 +108,119 @@ export function MemoryDashboard() {
     }
   };
 
-  const handleSaveEdit = async (memoryId: string, input: UpdateMemoryRequest) => {
+  /**
+   * Direct Memory Operations:
+   * When user manually adds, edits, or deletes a memory from the UI,
+   * we create the proposal and immediately approve it so it is directly
+   * finalized into approved ProfileMemory without requiring an extra review step.
+   */
+  const handleCreateMemoryDirect = async (input: CreateProposalRequest) => {
     try {
-      await editMemory(memoryId, input);
-      await fetchProposals();
-      showFeedback('success', 'Update proposal created! Review it under Pending Proposals.');
-      setActiveTab('PENDING');
+      // 1. Create proposal
+      const proposal = await memoryService.createProposal(input);
+      // 2. Immediately approve to write into ProfileMemory
+      await memoryService.approveProposal(proposal.id);
+      // 3. Re-fetch approved memories & pending proposals
+      await Promise.all([fetchMemories(), fetchProposals()]);
+      showFeedback('success', 'Memory saved successfully');
     } catch (err) {
-      showFeedback('error', err instanceof Error ? err.message : 'Failed to propose memory update');
+      showFeedback('error', err instanceof Error ? err.message : 'Failed to save memory');
       throw err;
     }
   };
 
-  const handleConfirmDelete = async (memoryId: string) => {
+  const handleSaveEditDirect = async (memoryId: string, input: UpdateMemoryRequest) => {
     try {
-      await deleteMemory(memoryId);
-      await fetchProposals();
-      showFeedback('success', 'Deletion proposal created! Review it under Pending Proposals.');
-      setActiveTab('PENDING');
+      // 1. Create edit proposal
+      const proposal = await memoryService.editMemory(memoryId, input);
+      // 2. Immediately approve update
+      await memoryService.approveProposal(proposal.id);
+      // 3. Re-fetch approved memories & pending proposals
+      await Promise.all([fetchMemories(), fetchProposals()]);
+      showFeedback('success', 'Memory updated successfully');
     } catch (err) {
-      showFeedback('error', err instanceof Error ? err.message : 'Failed to propose memory deletion');
+      showFeedback('error', err instanceof Error ? err.message : 'Failed to update memory');
       throw err;
     }
   };
 
-  const handleCreateProposal = async (input: CreateProposalRequest) => {
+  const handleConfirmDeleteDirect = async (memoryId: string) => {
     try {
-      await createProposal(input);
-      showFeedback('success', 'New memory proposal created! Review it under Pending Proposals.');
-      setActiveTab('PENDING');
+      // 1. Create delete proposal
+      const proposal = await memoryService.deleteMemory(memoryId);
+      // 2. Immediately approve deletion
+      await memoryService.approveProposal(proposal.id);
+      // 3. Re-fetch approved memories & pending proposals
+      await Promise.all([fetchMemories(), fetchProposals()]);
+      showFeedback('success', 'Memory deleted successfully');
     } catch (err) {
-      showFeedback('error', err instanceof Error ? err.message : 'Failed to create proposal');
+      showFeedback('error', err instanceof Error ? err.message : 'Failed to delete memory');
       throw err;
     }
   };
 
-  const approvedCount = memoryPagination?.total ?? memories.length;
-  const pendingCount = proposalPagination?.total ?? proposals.filter((p) => p.status === 'PENDING').length;
+  const pendingCount =
+    proposalPagination?.total ??
+    proposals.filter((p) => p.status === 'PENDING').length;
 
   return (
-    <div className="flex flex-col min-h-screen bg-page-bg">
-      {/* Top Navigation Bar */}
-      <header className="h-12 border-b border-divider bg-card px-4 flex items-center justify-between shrink-0 sticky top-0 z-20">
+    <div className="flex flex-col min-h-screen bg-[#F7F6F1]">
+      {/* Top Navigation Bar (Stitch header) */}
+      <header className="h-12 border-b border-divider bg-[#F7F6F1] px-4 flex items-center justify-between shrink-0 sticky top-0 z-20">
         <div className="flex items-center gap-2">
           <button
             type="button"
             onClick={() => navigate('/')}
-            className="flex items-center gap-1.5 text-xs text-text-secondary hover:text-text-primary transition-colors focus:outline-none"
+            className="flex items-center gap-2 text-xs text-[#7B8278] hover:text-[#102A24] transition-colors focus:outline-none"
           >
             <ArrowLeft className="w-4 h-4" />
             <span className="font-medium">Assistant</span>
           </button>
-          <span className="text-divider font-light">|</span>
-          <h1 className="text-xs font-semibold text-text-primary">Profile Memory</h1>
+          <span className="text-[#7B8278]/60 font-light text-sm">/</span>
+          <h1 className="text-xs sm:text-sm font-bold text-[#102A24] tracking-tight">
+            Profile Memory
+          </h1>
         </div>
 
-        <button
-          type="button"
-          onClick={() => void handleRefreshAll()}
-          title="Refresh memory"
-          className="p-1.5 rounded-lg text-text-secondary hover:text-text-primary hover:bg-page-bg transition-colors"
-        >
-          <RotateCw className="w-3.5 h-3.5" />
-        </button>
+        <div className="flex items-center gap-2">
+          {pendingCount > 0 && (
+            <button
+              type="button"
+              onClick={() =>
+                setActiveView(activeView === 'PENDING' ? 'APPROVED' : 'PENDING')
+              }
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold transition-colors ${
+                activeView === 'PENDING'
+                  ? 'bg-[#102A24] text-white'
+                  : 'bg-amber-100/80 text-amber-900 hover:bg-amber-200/80'
+              }`}
+              title="Review pending memory proposals"
+            >
+              <Clock className="w-3.5 h-3.5" />
+              <span>Pending ({pendingCount})</span>
+            </button>
+          )}
+
+          <button
+            type="button"
+            onClick={() => void handleRefreshAll()}
+            disabled={isRefreshing}
+            title="Refresh memory"
+            className="p-1.5 rounded-lg text-[#7B8278] hover:text-[#102A24] hover:bg-black/5 transition-colors"
+          >
+            <RotateCw
+              className={`w-4 h-4 ${isRefreshing ? 'animate-spin text-[#102A24]' : ''}`}
+            />
+          </button>
+        </div>
       </header>
 
       {/* Main Content Scrollable Area */}
-      <main className="flex-1 p-3.5 sm:p-5 max-w-2xl mx-auto w-full flex flex-col gap-4">
-        {/* Top Overview & Stats */}
-        <MemoryOverview
-          approvedCount={approvedCount}
-          pendingCount={pendingCount}
-          onOpenCreateModal={() => setIsCreateModalOpen(true)}
-        />
-
+      <main className="flex-1 p-3.5 sm:p-5 max-w-2xl mx-auto w-full flex flex-col gap-3.5">
         {/* Global Feedback Banner */}
         {feedbackMessage && (
           <div
-            className={`p-3 rounded-xl border flex items-center gap-2.5 text-xs animate-in fade-in slide-in-from-top-1 duration-150 ${
+            className={`p-3 rounded-2xl border flex items-center gap-2.5 text-xs animate-in fade-in slide-in-from-top-1 duration-150 ${
               feedbackMessage.type === 'success'
                 ? 'bg-success/10 border-success/30 text-success'
                 : 'bg-danger/10 border-danger/30 text-danger'
@@ -196,57 +237,74 @@ export function MemoryDashboard() {
 
         {/* Top Error States if load failed */}
         {(memoryError || proposalError) && (
-          <div className="p-3 rounded-xl bg-danger/10 border border-danger/30 text-danger text-xs flex items-center gap-2">
+          <div className="p-3 rounded-2xl bg-danger/10 border border-danger/30 text-danger text-xs flex items-center gap-2">
             <AlertCircle className="w-4 h-4 shrink-0" />
             <span>{memoryError || proposalError}</span>
           </div>
         )}
 
-        {/* Main Section Switcher Tabs */}
-        <div className="flex gap-1.5 p-1 bg-page-bg border border-divider rounded-xl">
-          <button
-            type="button"
-            onClick={() => setActiveTab('APPROVED')}
-            className={`flex-1 py-1.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-2 transition-all ${
-              activeTab === 'APPROVED'
-                ? 'bg-card text-text-primary shadow-xs'
-                : 'text-text-secondary hover:text-text-primary'
-            }`}
-          >
-            <BookmarkCheck className="w-3.5 h-3.5" />
-            <span>Approved Memories</span>
-            <span
-              className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${
-                activeTab === 'APPROVED'
-                  ? 'bg-accent/15 text-accent'
-                  : 'bg-divider text-text-secondary'
-              }`}
-            >
-              {approvedCount}
-            </span>
-          </button>
+        {/* Stitch Introduction Card */}
+        {activeView === 'APPROVED' && (
+          <div className="bg-card border border-divider rounded-2xl p-4 sm:p-5 shadow-2xs">
+            <h2 className="text-base sm:text-lg font-bold text-[#102A24] tracking-tight">
+              Profile Memory
+            </h2>
+            <div className="flex items-center justify-between gap-3 mt-1.5">
+              <p className="text-xs sm:text-[13px] text-[#555C54] leading-relaxed max-w-[210px] sm:max-w-[270px]">
+                Save personal context, preferences, and custom instructions to personalize every conversation.
+              </p>
+              <button
+                type="button"
+                onClick={() => setIsCreateModalOpen(true)}
+                className="bg-[#102A24] hover:bg-[#17483A] text-white text-xs font-semibold px-4 py-2 rounded-full flex items-center gap-1.5 shadow-xs active:scale-95 transition-all shrink-0"
+              >
+                <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
+                <span>Add Memory</span>
+              </button>
+            </div>
+          </div>
+        )}
 
-          <button
-            type="button"
-            onClick={() => setActiveTab('PENDING')}
-            className={`flex-1 py-1.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-2 transition-all ${
-              activeTab === 'PENDING'
-                ? 'bg-card text-text-primary shadow-xs'
-                : 'text-text-secondary hover:text-text-primary'
-            }`}
-          >
-            <Clock className="w-3.5 h-3.5" />
-            <span>Pending Proposals</span>
-            {pendingCount > 0 && (
-              <span className="text-[10px] px-1.5 py-0.2 rounded-full font-bold bg-warning/20 text-warning">
-                {pendingCount}
+        {/* Pending Proposals Notification Banner (if proposals exist in approved mode) */}
+        {pendingCount > 0 && activeView === 'APPROVED' && (
+          <div className="bg-amber-50/80 border border-amber-200/90 rounded-2xl p-3 flex items-center justify-between text-xs text-amber-950">
+            <div className="flex items-center gap-2">
+              <Clock className="w-4 h-4 text-amber-700 shrink-0" />
+              <span>
+                You have <strong>{pendingCount}</strong> pending memory proposal{pendingCount > 1 ? 's' : ''} to review.
               </span>
-            )}
-          </button>
-        </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setActiveView('PENDING')}
+              className="px-3 py-1 bg-[#102A24] hover:bg-[#17483A] text-white rounded-full text-[11px] font-semibold transition-colors shrink-0"
+            >
+              Review
+            </button>
+          </div>
+        )}
 
-        {/* Tab Views */}
-        {activeTab === 'APPROVED' ? (
+        {/* Pending Proposals Review View Banner */}
+        {activeView === 'PENDING' && (
+          <div className="flex items-center justify-between bg-card border border-divider rounded-2xl p-3.5 text-xs shadow-2xs">
+            <div className="flex items-center gap-2">
+              <Clock className="w-4 h-4 text-[#102A24]" />
+              <span className="font-bold text-[#102A24]">
+                Pending Proposals ({pendingCount})
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setActiveView('APPROVED')}
+              className="text-xs font-semibold text-[#17483A] hover:underline"
+            >
+              ← Back to Approved Memories
+            </button>
+          </div>
+        )}
+
+        {/* Main Content Area */}
+        {activeView === 'APPROVED' ? (
           <ApprovedMemoryList
             memories={memories}
             pagination={memoryPagination}
@@ -271,39 +329,38 @@ export function MemoryDashboard() {
             page={proposalPage}
             onPageChange={setProposalPage}
             processingIds={processingIds}
-            onApprove={handleApprove}
-            onReject={handleReject}
+            onApprove={handleApproveProposal}
+            onReject={handleRejectProposal}
           />
         )}
       </main>
 
-      {/* Edit Modal */}
+      {/* Edit Memory Modal */}
       {editingMemory && (
         <EditMemoryModal
           memory={editingMemory}
           isOpen={true}
           onClose={() => setEditingMemory(null)}
-          onSave={handleSaveEdit}
+          onSave={handleSaveEditDirect}
         />
       )}
 
-      {/* Delete Confirmation Dialog */}
+      {/* Delete Memory Confirmation Dialog */}
       {deletingMemory && (
         <DeleteMemoryDialog
           memory={deletingMemory}
           isOpen={true}
           onClose={() => setDeletingMemory(null)}
-          onConfirm={handleConfirmDelete}
+          onConfirm={handleConfirmDeleteDirect}
         />
       )}
 
-      {/* Manual Memory Creation Modal */}
+      {/* Add Memory Modal */}
       <CreateProposalModal
         isOpen={isCreateModalOpen}
         onClose={() => setIsCreateModalOpen(false)}
-        onSubmit={handleCreateProposal}
+        onSubmit={handleCreateMemoryDirect}
       />
     </div>
   );
 }
-
