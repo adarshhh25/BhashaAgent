@@ -1,8 +1,7 @@
-import { useState, useCallback } from 'react';
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   ArrowLeft,
-  RotateCw,
   Plus,
   Clock,
   CheckCircle2,
@@ -27,7 +26,6 @@ type DashboardView = 'APPROVED' | 'PENDING';
 export function MemoryDashboard() {
   const navigate = useNavigate();
   const [activeView, setActiveView] = useState<DashboardView>('APPROVED');
-  const [isRefreshing, setIsRefreshing] = useState(false);
 
   const {
     memories,
@@ -75,18 +73,6 @@ export function MemoryDashboard() {
       setFeedbackMessage(null);
     }, 4000);
   };
-
-  const handleRefreshAll = useCallback(async () => {
-    setIsRefreshing(true);
-    try {
-      await Promise.all([fetchMemories(), fetchProposals()]);
-      showFeedback('success', 'Profile memory refreshed');
-    } catch (err) {
-      showFeedback('error', 'Failed to refresh memories');
-    } finally {
-      setIsRefreshing(false);
-    }
-  }, [fetchMemories, fetchProposals]);
 
   // AI-generated pending proposal review
   const handleApproveProposal = async (proposalId: string) => {
@@ -165,22 +151,16 @@ export function MemoryDashboard() {
 
   return (
     <div className="flex flex-col min-h-screen bg-[#F7F6F1]">
-      {/* Top Navigation Bar (Stitch header) */}
+      {/* Top Navigation Bar */}
       <header className="h-12 border-b border-divider bg-[#F7F6F1] px-4 flex items-center justify-between shrink-0 sticky top-0 z-20">
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => navigate('/')}
-            className="flex items-center gap-2 text-xs text-[#7B8278] hover:text-[#102A24] transition-colors focus:outline-none"
-          >
-            <ArrowLeft className="w-4 h-4" />
-            <span className="font-medium">Assistant</span>
-          </button>
-          <span className="text-[#7B8278]/60 font-light text-sm">/</span>
-          <h1 className="text-xs sm:text-sm font-bold text-[#102A24] tracking-tight">
-            Profile Memory
-          </h1>
-        </div>
+        <button
+          type="button"
+          onClick={() => navigate('/')}
+          className="flex items-center gap-1.5 text-xs text-[#7B8278] hover:text-[#102A24] font-medium transition-colors focus:outline-none"
+        >
+          <ArrowLeft className="w-4 h-4" />
+          <span>Back to Assistant</span>
+        </button>
 
         <div className="flex items-center gap-2">
           {pendingCount > 0 && (
@@ -201,17 +181,9 @@ export function MemoryDashboard() {
             </button>
           )}
 
-          <button
-            type="button"
-            onClick={() => void handleRefreshAll()}
-            disabled={isRefreshing}
-            title="Refresh memory"
-            className="p-1.5 rounded-lg text-[#7B8278] hover:text-[#102A24] hover:bg-black/5 transition-colors"
-          >
-            <RotateCw
-              className={`w-4 h-4 ${isRefreshing ? 'animate-spin text-[#102A24]' : ''}`}
-            />
-          </button>
+          <h1 className="text-xs sm:text-sm font-bold text-[#102A24] tracking-tight">
+            Profile Memory
+          </h1>
         </div>
       </header>
 
