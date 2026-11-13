@@ -22,6 +22,9 @@ export interface LLMRequest {
     type: "function";
     function: { name: string };
   };
+  responseFormat?: "json" | "text";
+  requestId?: string;
+  conversationId?: string;
 }
 
 export interface LLMToolCall {
@@ -35,6 +38,12 @@ export interface LLMResponse {
   content?: string;
   toolCalls: LLMToolCall[];
   usage?: { inputTokens?: number; outputTokens?: number };
+  model?: string;
+  provider?: string;
+  attemptCount?: number;
+  fallbackUsed?: boolean;
+  fallbackReasons?: string[];
+  latencyMs?: number;
 }
 
 export interface LLMProvider {

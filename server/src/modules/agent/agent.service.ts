@@ -5,7 +5,7 @@ import { prisma } from "../../config/database";
 import { buildAgentContext } from "../context/context.service";
 import { getLLMProvider } from "../llm/llm.factory";
 import { orchestrate } from "./agent.orchestrator";
-import { detectConversationLanguage } from "./language-detector";
+import { detectConversationLanguage, deduplicateConsecutiveWords } from "./language-detector";
 import type { AgentTurnResult } from "./agent.types";
 
 export interface FormBrowserAction {
@@ -63,14 +63,15 @@ export async function runAgentTurn(input: {
   language?: string;
   formTaskId?: string;
 }): Promise<AgentTurnResult & { assistantMessageId: string; formActions?: FormBrowserAction[] }> {
-  const detectedLanguage = detectConversationLanguage(input.content, input.language);
+  const normalizedContent = deduplicateConsecutiveWords(input.content);
+  const detectedLanguage = detectConversationLanguage(normalizedContent, input.language);
   const effectiveLanguage = (input.language && input.language.toLowerCase().startsWith(detectedLanguage))
     ? input.language
     : detectedLanguage;
   const message = await createUserMessage({
     userId: input.userId,
     conversationId: input.conversationId,
-    content: input.content,
+    content: normalizedContent,
     inputMode: "TEXT",
     language: effectiveLanguage,
   });
@@ -82,7 +83,8 @@ export async function runAgentTurn(input: {
   });
   const result = await orchestrate(input.userId, contextResult.context, getLLMProvider());
   if (!result.response.trim()) throw new HttpError(502, "EMPTY_AGENT_RESPONSE", "The assistant returned an empty response");
-  const responseLanguage = result.language?.responseLanguage || effectiveLanguage;
+  const detectedTurnLang = detectConversationLanguage(input.content, input.language);
+  const responseLanguage = result.language?.responseLanguage || detectedTurnLang;
   const assistant = await createAssistantMessage({
     conversationId: input.conversationId,
     content: result.response,
@@ -143,14 +145,15 @@ async function claimVoiceMessage(input: VoiceTranscriptInput) {
       });
       return { key, message: updated, assistant: null, reused: false };
     }
-    const detectedLanguage = detectConversationLanguage(input.content, input.language);
+    const normalizedContent = deduplicateConsecutiveWords(input.content);
+    const detectedLanguage = detectConversationLanguage(normalizedContent, input.language);
     const effectiveLanguage = (input.language && input.language.toLowerCase().startsWith(detectedLanguage))
       ? input.language
       : detectedLanguage;
     const message = await createUserMessageInTransaction(transaction, {
       userId: input.userId,
       conversationId: input.conversationId,
-      content: input.content,
+      content: normalizedContent,
       inputMode: "VOICE",
       language: effectiveLanguage,
       metadata: {

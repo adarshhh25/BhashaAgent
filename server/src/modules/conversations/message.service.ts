@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { prisma } from "../../config/database";
 import { HttpError } from "../../common/errors";
 import { assertConversationWritable } from "./conversation.service";
+import { sanitizeResponseText } from "../agent/agent.validator";
 
 const messageSelect = {
   id: true,
@@ -83,12 +84,13 @@ export async function createAssistantMessage(input: {
   const conversation = await prisma.conversation.findUnique({ where: { id: input.conversationId } });
   if (!conversation) throw new HttpError(404, "CONVERSATION_NOT_FOUND", "Conversation not found");
   assertConversationWritable(conversation.status);
+  const cleanContent = sanitizeResponseText(input.content, input.language || "en");
   return prisma.$transaction(async (transaction) => {
     const message = await transaction.message.create({
       data: {
         conversationId: input.conversationId,
         role: "ASSISTANT",
-        content: input.content,
+        content: cleanContent,
         inputMode: input.inputMode ?? "TEXT",
         language: input.language,
         metadata: input.metadata,

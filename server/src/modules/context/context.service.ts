@@ -277,26 +277,67 @@ function taskProjection(taskResult: Awaited<ReturnType<typeof getTask>>) {
   const task = taskResult.task;
   const fields: ContextDetectedField[] = taskResult.fields
     .filter((field) => field.status === "ACTIVE")
-    .map((field) => ({
-      id: field.id,
-      fieldIdentifier: field.fieldIdentifier,
-      fieldKey: field.fieldKey ?? undefined,
-      label: field.label,
-      name: field.name ?? undefined,
-      elementType: field.elementType,
-      inputType: field.inputType,
-      placeholder: field.placeholder ?? undefined,
-      required: field.isRequired,
-      disabled: field.isDisabled,
-      readOnly: field.isReadOnly,
-      status: field.status,
-      detectedOrder: field.detectedOrder ?? undefined,
-      groupName: field.groupName ?? undefined,
-      sectionName: field.sectionName ?? undefined,
-      detectionConfidence: numberValue(field.detectionConfidence),
-      options: field.options ?? undefined,
-      sourceReference: { type: "field", id: field.id, createdAt: field.createdAt.toISOString() },
-    }));
+    .map((field) => {
+      const latestValue = field.fieldValues[0];
+      const hasValue = Boolean(latestValue && latestValue.value !== null && latestValue.value !== undefined && latestValue.value !== "");
+      const isVerified = latestValue?.executionStatus === "FILLED";
+      const isApplied = isVerified || latestValue?.executionStatus === "IN_PROGRESS";
+      const isApproved = latestValue?.status === "APPROVED";
+      const isCollected = hasValue;
+      const isEmpty = !hasValue;
+
+      let lifecycleStatus: ContextDetectedField["lifecycleStatus"] = "EMPTY";
+      if (isVerified) lifecycleStatus = "VERIFIED";
+      else if (isApplied) lifecycleStatus = "APPLIED";
+      else if (isApproved) lifecycleStatus = "APPROVED";
+      else if (isCollected) lifecycleStatus = "COLLECTED";
+      else if (latestValue?.executionStatus === "FAILED") lifecycleStatus = "FAILED";
+
+      const redacted = field.inputType.toLowerCase() === "password";
+      let provenance: string | undefined = undefined;
+      if (hasValue && latestValue) {
+        if (latestValue.source === "USER_PROVIDED" || latestValue.source === "CONVERSATION" || latestValue.source === "USER_INPUT") {
+          provenance = "USER_EXPLICIT";
+        } else if (latestValue.source === "APPROVED_PROFILE_MEMORY") {
+          provenance = "USER_CONFIRMED";
+        } else if (latestValue.source === "PROFILE_MEMORY") {
+          provenance = "PROFILE_MEMORY";
+        } else if (latestValue.source === "USER_CORRECTED") {
+          provenance = "USER_CORRECTED";
+        } else {
+          provenance = latestValue.source;
+        }
+      }
+
+      return {
+        id: field.id,
+        fieldIdentifier: field.fieldIdentifier,
+        fieldKey: field.fieldKey ?? undefined,
+        label: field.label,
+        name: field.name ?? undefined,
+        elementType: field.elementType,
+        inputType: field.inputType,
+        placeholder: field.placeholder ?? undefined,
+        required: field.isRequired,
+        disabled: field.isDisabled,
+        readOnly: field.isReadOnly,
+        status: field.status,
+        detectedOrder: field.detectedOrder ?? undefined,
+        groupName: field.groupName ?? undefined,
+        sectionName: field.sectionName ?? undefined,
+        detectionConfidence: numberValue(field.detectionConfidence),
+        options: field.options ?? undefined,
+        sourceReference: { type: "field", id: field.id, createdAt: field.createdAt.toISOString() },
+        lifecycleStatus,
+        isEmpty,
+        isCollected,
+        collectedValue: hasValue && latestValue ? (redacted ? "[REDACTED]" : latestValue.value) : undefined,
+        provenance,
+        isApproved,
+        isApplied,
+        isVerified,
+      };
+    });
   const fieldIds = new Set(fields.map((field) => field.id));
   const values: ContextFieldValue[] = taskResult.fields.flatMap((field) => {
     if (!fieldIds.has(field.id) || !field.fieldValues[0]) return [];

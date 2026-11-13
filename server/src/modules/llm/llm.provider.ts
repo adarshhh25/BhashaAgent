@@ -137,7 +137,15 @@ export class HttpLLMProvider implements LLMProvider {
           throw new LLMError("PROVIDER_UNAVAILABLE", "Groq provider request failed");
         }
 
-        return parseResponse(await response.json());
+        const data = await response.json();
+        const parsed = parseResponse(data);
+        return {
+          ...parsed,
+          model: request.model ?? config.llm.model,
+          provider: "groq",
+          attemptCount: attempt + 1,
+          fallbackUsed: true,
+        };
       } catch (error) {
         if (error instanceof LLMError) throw error;
         if (error instanceof Error && error.name === "AbortError") throw new LLMError("TIMEOUT", "Groq provider timed out");

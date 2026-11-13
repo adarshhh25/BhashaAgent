@@ -35,6 +35,48 @@ function sanitizeProviderMessage(msg: string | undefined): string {
   return msg.replace(/[\r\n\t]/g, " ").trim().slice(0, 200);
 }
 
+export interface GnaniResolvedConfig {
+  effectiveLanguage: string;
+  effectiveFormat: string;
+}
+
+export function resolveGnaniSttConfig(requestedLang?: string): GnaniResolvedConfig {
+  const raw = (requestedLang || "").toLowerCase().trim();
+
+  // Explicit Hindi preference
+  if (raw === "hi" || raw === "hi-in" || raw === "hindi") {
+    return { effectiveLanguage: "hi-IN", effectiveFormat: "codemix" };
+  }
+
+  // Explicit Marathi preference
+  if (raw === "mr" || raw === "mr-in" || raw === "marathi") {
+    return { effectiveLanguage: "mr-IN", effectiveFormat: "codemix" };
+  }
+
+  // Explicit Hinglish / Code-mixed preference
+  if (raw.includes("hinglish") || raw.startsWith("hi-en")) {
+    return { effectiveLanguage: "hi-IN", effectiveFormat: "codemix" };
+  }
+
+  // Explicit English-only preference
+  if (raw === "en-in" || raw === "english-only") {
+    return { effectiveLanguage: "en-IN", effectiveFormat: "verbatim" };
+  }
+
+  // Default / Multilingual Auto mode
+  // If the environment config specifies indic-auto or no specific language was locked:
+  if (!raw || raw === "auto" || raw === "indic-auto" || raw === "multilingual" || (raw.startsWith("en") && config.gnani.languageCode === "indic-auto")) {
+    return { effectiveLanguage: "indic-auto", effectiveFormat: "codemix" };
+  }
+
+  // Standard English fallback
+  if (raw.startsWith("en")) {
+    return { effectiveLanguage: "en-IN", effectiveFormat: "verbatim" };
+  }
+
+  return { effectiveLanguage: config.gnani.languageCode || "indic-auto", effectiveFormat: "codemix" };
+}
+
 export class GnaniPrismaAdapter implements SttProvider {
   private socket?: WebSocket;
   private eventListener: (event: GnaniAdapterEvent) => void = () => undefined;
@@ -43,17 +85,12 @@ export class GnaniPrismaAdapter implements SttProvider {
   private isConnecting = false;
   private frameBuffer: Buffer[] = [];
   private effectiveLanguage: string;
+  private effectiveFormat: string;
 
   constructor(private requestedLanguage?: string) {
-    const rawLang = (this.requestedLanguage || config.gnani.languageCode || "hi-IN").toLowerCase();
-    this.effectiveLanguage =
-      rawLang.startsWith("hi") || rawLang.includes("hinglish")
-        ? "hi-IN"
-        : rawLang.startsWith("mr")
-          ? "mr-IN"
-          : rawLang.startsWith("en")
-            ? "en-IN"
-            : config.gnani.languageCode;
+    const resolved = resolveGnaniSttConfig(this.requestedLanguage);
+    this.effectiveLanguage = resolved.effectiveLanguage;
+    this.effectiveFormat = resolved.effectiveFormat;
   }
 
   async connect(): Promise<void> {
@@ -67,8 +104,10 @@ export class GnaniPrismaAdapter implements SttProvider {
     const requestId = randomUUID();
 
     const effectiveGnaniLang = this.effectiveLanguage;
+    const effectiveGnaniFormat = this.effectiveFormat;
 
-    console.log(`[GnaniPrisma] STT connection attempt: endpoint=${config.gnani.endpoint}, model=${config.gnani.model}, languageCode=${effectiveGnaniLang}, sampleRate=${config.gnani.sampleRate}, requestId=${requestId}`);
+    console.log(`[MultilingualSTT] Session initialized: preferredLanguage=${this.requestedLanguage || 'auto'}, providerLanguage=${effectiveGnaniLang}, format=${effectiveGnaniFormat}, sampleRate=${config.gnani.sampleRate}`);
+    console.log(`[GnaniPrisma] STT connection attempt: endpoint=${config.gnani.endpoint}, model=${config.gnani.model}, languageCode=${effectiveGnaniLang}, format=${effectiveGnaniFormat}, sampleRate=${config.gnani.sampleRate}, requestId=${requestId}`);
 
     await new Promise<void>((resolve, reject) => {
       const socket = new WebSocket(config.gnani.endpoint, {
@@ -76,7 +115,7 @@ export class GnaniPrismaAdapter implements SttProvider {
           "x-api-key-id": config.gnani.apiKey,
           model: config.gnani.model,
           language_code: effectiveGnaniLang,
-          format: config.gnani.format,
+          format: effectiveGnaniFormat,
           "x-sample-rate": String(config.gnani.sampleRate),
           "x-idle-timeout-sec": String(config.gnani.idleTimeoutSeconds),
           "x-api-request-id": requestId,
@@ -180,20 +219,35 @@ export class GnaniPrismaAdapter implements SttProvider {
 
     if (event.type === "connected") {
       const active = event.config;
-      const expectedLang = this.effectiveLanguage || config.gnani.languageCode;
-      console.log(`[GnaniPrisma] Provider session ready: sampleRate=${active?.sample_rate ?? config.gnani.sampleRate}, chunkSize=${active?.chunk_size ?? config.gnani.frameBytes / 2}, languageCode=${active?.language_code ?? expectedLang}, format=${active?.format ?? config.gnani.format}`);
+      const expectedLang = (this.effectiveLanguage || config.gnani.languageCode).toLowerCase().trim();
+      const actualLang = (active?.language_code || "").toLowerCase().trim();
+      console.log(`[GnaniPrisma] Provider session ready: sampleRate=${active?.sample_rate ?? config.gnani.sampleRate}, chunkSize=${active?.chunk_size ?? config.gnani.frameBytes / 2}, languageCode=${active?.language_code ?? expectedLang}, format=${active?.format ?? this.effectiveFormat}`);
 
       const languageMatches =
-        !active?.language_code ||
-        active.language_code === expectedLang ||
-        active.language_code === config.gnani.languageCode ||
-        active.language_code.toLowerCase().startsWith(expectedLang.slice(0, 2).toLowerCase());
+        !actualLang ||
+        actualLang === expectedLang ||
+        actualLang === config.gnani.languageCode.toLowerCase() ||
+        actualLang.startsWith(expectedLang.slice(0, 2)) ||
+        expectedLang.startsWith(actualLang.slice(0, 2)) ||
+        actualLang.includes("auto") ||
+        expectedLang.includes("auto");
 
-      const sampleRateMatches = !active?.sample_rate || active.sample_rate === config.gnani.sampleRate;
-      const formatMatches = !active?.format || active.format === config.gnani.format;
+      const actualSampleRate = active?.sample_rate ? Number(active.sample_rate) : undefined;
+      const expectedSampleRate = Number(config.gnani.sampleRate);
+      const sampleRateMatches = !actualSampleRate || actualSampleRate === expectedSampleRate;
+
+      const actualFormat = (active?.format || "").toLowerCase().trim();
+      const expectedEffectiveFormat = (this.effectiveFormat || "").toLowerCase().trim();
+      const expectedConfigFormat = (config.gnani.format || "").toLowerCase().trim();
+      const formatMatches =
+        !actualFormat ||
+        actualFormat === expectedEffectiveFormat ||
+        actualFormat === expectedConfigFormat ||
+        actualFormat === "codemix" ||
+        actualFormat === "verbatim";
 
       if (!languageMatches || !sampleRateMatches || !formatMatches) {
-        console.error(`[GnaniPrisma] Provider configuration mismatch: expected language=${expectedLang}, sampleRate=${config.gnani.sampleRate}, got language=${active?.language_code}, sampleRate=${active?.sample_rate}`);
+        console.error(`[GnaniPrisma] Provider configuration mismatch: expected language=${expectedLang}, sampleRate=${expectedSampleRate}, format=${expectedEffectiveFormat}, got language=${active?.language_code}, sampleRate=${active?.sample_rate}, format=${active?.format}`);
         this.eventListener({ type: "error", code: "PROVIDER_CONFIGURATION_ERROR", message: "Speech provider configuration was not accepted" });
         return;
       }

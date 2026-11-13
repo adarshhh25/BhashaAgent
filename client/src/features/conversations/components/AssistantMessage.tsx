@@ -5,8 +5,44 @@ interface AssistantMessageProps {
   message: Message;
 }
 
+function cleanDisplayContent(raw: string, lang?: string | null): string {
+  if (!raw) return "";
+  let clean = raw.trim();
+  const hasSchema = clean.includes('"intent"') || clean.includes('"responseDraft"') || clean.includes('"decision"') || clean.includes('"toolCalls"') || clean.includes('"primary"');
+  if (clean.startsWith("{") || hasSchema) {
+    try {
+      const parsed = JSON.parse(clean);
+      if (typeof parsed.responseDraft === "string" && parsed.responseDraft.trim()) {
+        return cleanDisplayContent(parsed.responseDraft, lang);
+      }
+      if (typeof parsed.clarification?.question === "string" && parsed.clarification.question.trim()) {
+        return cleanDisplayContent(parsed.clarification.question, lang);
+      }
+    } catch {
+      const draftMatch = clean.match(/"responseDraft"\s*:\s*"((?:[^"\\]|\\.)*)"?/);
+      if (draftMatch && draftMatch[1]) {
+        return draftMatch[1].replace(/\\n/g, "\n").replace(/\\"/g, '"').trim();
+      }
+      const questionMatch = clean.match(/"question"\s*:\s*"((?:[^"\\]|\\.)*)"?/);
+      if (questionMatch && questionMatch[1]) {
+        return questionMatch[1].replace(/\\n/g, "\n").replace(/\\"/g, '"').trim();
+      }
+    }
+    if (lang === "hi") {
+      return "मैंने आपका फ़ॉर्म देख लिया है। कृपया बताइए कि आप कौन सा विवरण भरना चाहते हैं?";
+    } else if (lang === "mr") {
+      return "मी तुमचा फॉर्म पाहिला आहे. कृपया सांगा की तुम्हाला कोणता तपशील भरायचा आहे?";
+    } else if (lang === "hinglish") {
+      return "Maine aapka form dekh liya hai. Aap kaunsa detail pehle bharna chahte hain?";
+    }
+    return "I can see your form. Which detail would you like to fill first?";
+  }
+  return clean;
+}
+
 export function AssistantMessage({ message }: AssistantMessageProps) {
   const intent = message.metadata?.intent as string | undefined;
+  const displayContent = cleanDisplayContent(message.content, message.language);
 
   return (
     <div className="flex flex-col items-start gap-1 w-full max-w-full pr-8">
@@ -19,7 +55,7 @@ export function AssistantMessage({ message }: AssistantMessageProps) {
         {/* Message bubble */}
         <div className="flex flex-col gap-1.5 max-w-full">
           <div className="bg-card text-text-primary border border-divider px-3.5 py-2.5 rounded-2xl rounded-tl-xs text-sm leading-relaxed shadow-xs break-words">
-            <p className="whitespace-pre-wrap">{message.content}</p>
+            <p className="whitespace-pre-wrap">{displayContent}</p>
           </div>
 
           {/* Metadata pills (intent, decision, tool indicators) */}

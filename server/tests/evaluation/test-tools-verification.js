@@ -1,10 +1,11 @@
 require("dotenv/config");
 
+const test = require("node:test");
 const assert = require("node:assert/strict");
 const { agentTools, toolDefinitions, findTool } = require("../../dist/modules/agent/agent.tools");
 const { prisma } = require("../../dist/config/database");
 
-async function verifyTools() {
+test("all 7 agent tools pass validation", async () => {
   console.log("=== VERIFYING ALL 7 AGENT TOOLS ===");
   assert.equal(agentTools.length, 7, "Must have exactly 7 agent tools");
   assert.equal(toolDefinitions.length, 7, "Must have exactly 7 tool definitions");
@@ -141,6 +142,13 @@ async function verifyTools() {
     });
     const contextWithField = {
       ...mockContext,
+      request: {
+        ...mockContext.request,
+        currentUserMessage: {
+          ...mockContext.request.currentUserMessage,
+          content: "My name is John Doe",
+        },
+      },
       formTask: {
         id: formTask.id,
         status: "CREATED",
@@ -191,11 +199,5 @@ async function verifyTools() {
     await prisma.formTask.deleteMany({ where: { userId: user.id } });
     await prisma.conversation.deleteMany({ where: { userId: user.id } });
     await prisma.user.delete({ where: { id: user.id } });
-    await prisma.$disconnect();
   }
-}
-
-verifyTools().catch((err) => {
-  console.error("Tool verification failed:", err);
-  process.exit(1);
 });

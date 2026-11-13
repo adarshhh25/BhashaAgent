@@ -99,6 +99,63 @@ function resolveMultilingualFieldValue(field: AgentContext["formTask"]["detected
   return rawValue;
 }
 
+export function isValueGroundedInUserUtterance(
+  field: AgentContext["formTask"]["detectedFields"][number],
+  value: unknown,
+  context: AgentContext,
+): boolean {
+  if (value === undefined || value === null || value === "") return false;
+  if (typeof value === "boolean") return true;
+
+  const userMsg = (context.request.currentUserMessage.content || "").toLowerCase().trim();
+  const valStr = String(value).toLowerCase().trim();
+
+  // 1. Check if user utterance directly matches an option for this field
+  if (field.options && Array.isArray(field.options) && field.options.length > 0) {
+    const matchRes = matchOption(value, field.options as FormOption[]);
+    if (matchRes.matched) {
+      // Also verify user mentioned the concept or option
+      const optVal = String(matchRes.option?.value || "").toLowerCase();
+      const optLabel = String(matchRes.option?.label || "").toLowerCase();
+      if (userMsg.includes(optVal) || userMsg.includes(optLabel) || userMsg.includes(valStr) || matchOption(userMsg, field.options as FormOption[]).matched) {
+        return true;
+      }
+    }
+  }
+
+  // 2. Direct string match in current user message
+  if (userMsg.includes(valStr)) return true;
+
+  // 3. Multi-token name/address/instruction match
+  const tokens = valStr.split(/[\s,]+/).filter((t) => t.length >= 2);
+  if (tokens.length > 0 && tokens.every((t) => userMsg.includes(t))) return true;
+
+  // 4. Number/digit matching for phone/numeric fields
+  const digits = valStr.replace(/\D/g, "");
+  if (digits.length >= 4 && userMsg.replace(/\D/g, "").includes(digits)) return true;
+
+  // 5. Check recent conversation messages from the user
+  const recent = context.conversation.recentMessages || [];
+  for (const m of recent) {
+    if (m.role === "USER" || (m.role as string) === "user") {
+      const pastContent = (m.content || "").toLowerCase();
+      if (pastContent.includes(valStr)) return true;
+      if (tokens.length > 0 && tokens.every((t) => pastContent.includes(t))) return true;
+      if (digits.length >= 4 && pastContent.replace(/\D/g, "").includes(digits)) return true;
+    }
+  }
+
+  // 6. Explicit user authorization for profile memory
+  const userRequestedProfile = /\b(profile|saved|मेरी प्रोफाइल|माझी प्रोफाईल|माझे तपशील|saved details|use saved|fill from profile)\b/i.test(userMsg);
+  if (userRequestedProfile && context.profileMemory?.approvedFacts) {
+    for (const fact of context.profileMemory.approvedFacts) {
+      if (String(fact.value).toLowerCase().trim() === valStr) return true;
+    }
+  }
+
+  return false;
+}
+
 const fieldValueTool: AgentTool = {
   definition: {
     name: "propose_field_value",
@@ -153,6 +210,13 @@ const fieldValueTool: AgentTool = {
         const field = findTargetField(proposal.fieldId, context.formTask.detectedFields);
         if (!field) continue;
         const resolvedValue = resolveMultilingualFieldValue(field, proposal.value);
+
+        // Verify information provenance: value must be grounded in user conversation
+        if (!isValueGroundedInUserUtterance(field, resolvedValue, context)) {
+          console.warn(`[AgentTools] ProposeFieldValue: Skipping ungrounded/fabricated value for field "${field.label || field.id}": "${resolvedValue}"`);
+          continue;
+        }
+
         const res = await setFieldValue(userId, input.taskId, field.id, {
           value: resolvedValue as never,
           source: proposal.source,
@@ -180,6 +244,23 @@ const fieldValueTool: AgentTool = {
     const field = findTargetField(input.fieldId, context.formTask.detectedFields);
     if (!field) throw new Error("Field is not part of the selected task");
     const resolvedValue = resolveMultilingualFieldValue(field, input.value);
+
+    // Verify information provenance: value must be grounded in user conversation
+    if (!isValueGroundedInUserUtterance(field, resolvedValue, context)) {
+      console.warn(`[AgentTools] ProposeFieldValue: Rejecting ungrounded/fabricated value for field "${field.label || field.id}": "${resolvedValue}"`);
+      return {
+        id: "rejected",
+        fieldId: field.id,
+        fieldIdentifier: field.fieldIdentifier,
+        label: field.label,
+        inputType: field.inputType,
+        value: resolvedValue,
+        status: "REJECTED_UNGROUNDED",
+        message: "Value was not provided or authorized by the user in conversation",
+        redacted: field.inputType.toLowerCase() === "password",
+      };
+    }
+
     const result = await setFieldValue(userId, input.taskId, field.id, { value: resolvedValue as never, source: input.source, confidence: input.confidence });
     return {
       id: result.id,

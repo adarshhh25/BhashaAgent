@@ -16,6 +16,12 @@ export interface AgentLLMOutput {
   toolCalls: Array<{ id: string; name: string; arguments: Record<string, unknown> }>;
   clarification?: { required: boolean; question?: string };
   responseDraft?: string;
+  __telemetry?: {
+    parseSuccess: boolean;
+    structuredResponseValid: boolean;
+    validationStatus: "valid" | "repaired" | "invalid" | "not_applicable";
+    isFallbackResponseUsed?: boolean;
+  };
 }
 
 export interface AgentTurnResult {

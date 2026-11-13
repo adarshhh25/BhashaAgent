@@ -59,6 +59,14 @@ export interface ContextDetectedField {
   detectionConfidence?: number;
   options?: unknown;
   sourceReference: ContextSourceReference;
+  lifecycleStatus?: "EMPTY" | "COLLECTED" | "AWAITING_APPROVAL" | "APPROVED" | "APPLYING" | "APPLIED" | "VERIFIED" | "FAILED";
+  isEmpty?: boolean;
+  isCollected?: boolean;
+  collectedValue?: unknown;
+  provenance?: string;
+  isApproved?: boolean;
+  isApplied?: boolean;
+  isVerified?: boolean;
 }
 
 export interface ContextFieldValue {
