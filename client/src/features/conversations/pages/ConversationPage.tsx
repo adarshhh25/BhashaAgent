@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { AlertCircle, RefreshCw, MessageSquarePlus } from 'lucide-react';
+import { AlertCircle, RefreshCw } from 'lucide-react';
 import { useConversations } from '../hooks/useConversations';
 import { useActiveConversation } from '../hooks/useActiveConversation';
 import { useActiveBrowserForm } from '../../browser/hooks/useActiveBrowserForm';
@@ -11,6 +11,7 @@ import { MessageList } from '../components/MessageList';
 import { MessageComposer } from '../components/MessageComposer';
 import { MessageCorrectionModal } from '../components/MessageCorrectionModal';
 import { VoiceInterface } from '../../voice/components/VoiceInterface';
+import { BhashaLogo } from '../../../components/common/BhashaLogo';
 import type { Message } from '../types/conversation.types';
 
 export function ConversationPage() {
@@ -178,9 +179,7 @@ export function ConversationPage() {
             </div>
           ) : !activeConversationId ? (
             <div className="flex-1 flex flex-col items-center justify-center p-6 text-center text-text-secondary">
-              <div className="w-12 h-12 rounded-2xl bg-card border border-divider shadow-xs flex items-center justify-center mb-3 text-accent">
-                <MessageSquarePlus className="w-6 h-6" />
-              </div>
+              <BhashaLogo className="w-12 h-12 rounded-2xl mb-3 shadow-xs" />
               <h3 className="text-sm font-medium text-text-primary mb-1">No conversation selected</h3>
               <p className="text-xs text-text-secondary max-w-xs mb-4">
                 Start a new conversation in English, Hindi, Marathi, or Hinglish, or pick one from history.

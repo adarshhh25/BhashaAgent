@@ -1,9 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
-import { Languages, User, LogOut, ExternalLink, Loader2 } from 'lucide-react';
+import { User, LogOut, ExternalLink, Loader2 } from 'lucide-react';
 import PopupLayout from '../../layouts/PopupLayout';
 import { useAuth } from '../../features/auth/hooks/useAuth';
 import { LoginForm } from '../../features/auth/components/LoginForm';
 import { RegisterForm } from '../../features/auth/components/RegisterForm';
+import { BhashaLogo } from '../../components/common/BhashaLogo';
 
 export default function PopupPage() {
   const { user, isAuthenticated, isLoading, logout } = useAuth();
@@ -143,9 +144,7 @@ export default function PopupPage() {
             {/* Header */}
             <div className="flex items-center justify-between pb-3 border-b border-divider">
               <div className="flex items-center gap-2">
-                <div className="w-7 h-7 rounded-md bg-accent flex items-center justify-center text-white">
-                  <Languages className="w-4 h-4" strokeWidth={1.75} />
-                </div>
+                <BhashaLogo className="w-7 h-7 rounded-lg shadow-2xs" />
                 <span className="text-xs font-semibold text-text-primary">BhashaAgent</span>
               </div>
               <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-[#E8F8EC] text-success">
@@ -215,9 +214,7 @@ export default function PopupPage() {
         <div className="flex flex-col gap-3">
           {/* Header */}
           <div className="flex items-center gap-2 pb-2 border-b border-divider">
-            <div className="w-6 h-6 rounded-md bg-accent flex items-center justify-center text-white">
-              <Languages className="w-3.5 h-3.5" strokeWidth={1.75} />
-            </div>
+            <BhashaLogo className="w-7 h-7 rounded-lg shadow-2xs" />
             <div>
               <h1 className="text-xs font-semibold text-text-primary leading-tight">BhashaAgent</h1>
               <p className="text-[10px] text-text-secondary">Multilingual Assistant</p>

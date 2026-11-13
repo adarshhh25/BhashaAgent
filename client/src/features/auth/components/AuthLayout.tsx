@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { Languages } from 'lucide-react';
+import { BhashaLogo } from '../../../components/common/BhashaLogo';
 
 interface AuthLayoutProps {
   title: string;
@@ -13,9 +13,7 @@ export function AuthLayout({ title, subtitle, children }: AuthLayoutProps) {
       <div className="w-full max-w-sm flex flex-col gap-5">
         {/* Brand identity */}
         <div className="flex flex-col items-center text-center gap-2">
-          <div className="w-11 h-11 rounded-lg bg-accent flex items-center justify-center shadow-xs">
-            <Languages className="w-6 h-6 text-white" strokeWidth={1.75} />
-          </div>
+          <BhashaLogo className="w-12 h-12 rounded-xl shadow-xs" />
           <div>
             <h1 className="text-lg font-semibold text-text-primary tracking-tight">
               BhashaAgent

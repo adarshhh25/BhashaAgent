@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Mic, CheckCircle2, AlertCircle, ShieldCheck } from 'lucide-react';
+import { BhashaLogo } from '../components/common/BhashaLogo';
 
 export function PermissionPage() {
   const [status, setStatus] = useState<'IDLE' | 'REQUESTING' | 'GRANTED' | 'DENIED'>('IDLE');
@@ -62,6 +63,9 @@ export function PermissionPage() {
 
   return (
     <div className="bg-white rounded-2xl shadow-lg border border-gray-100 p-8 text-center flex flex-col items-center">
+      {/* Brand logo */}
+      <BhashaLogo className="w-12 h-12 rounded-xl mb-4 shadow-2xs" />
+
       {/* Icon header */}
       <div className="w-16 h-16 rounded-2xl bg-[#DCE7DC] text-[#102A24] flex items-center justify-center mb-5 shadow-xs">
         {status === 'GRANTED' ? (

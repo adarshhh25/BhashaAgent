@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { Loader2, ArrowUpCircle } from 'lucide-react';
 import type { Message } from '../types/conversation.types';
 import { MessageItem } from './MessageItem';
+import { BhashaLogo } from '../../../components/common/BhashaLogo';
 
 interface MessageListProps {
   messages: Message[];
@@ -49,6 +50,17 @@ export function MessageList({
             )}
             <span>Load older messages</span>
           </button>
+        </div>
+      )}
+
+      {/* Empty conversation placeholder */}
+      {messages.length === 0 && !isSubmittingTurn && (
+        <div className="flex-1 flex flex-col items-center justify-center p-6 text-center text-text-secondary my-auto">
+          <BhashaLogo className="w-12 h-12 rounded-2xl mb-3 shadow-xs" />
+          <h3 className="text-sm font-semibold text-text-primary mb-1">BhashaAgent</h3>
+          <p className="text-xs text-text-secondary max-w-xs leading-relaxed">
+            How can I help you today? Type or tap the microphone to talk in English, Hindi, Marathi, or Hinglish.
+          </p>
         </div>
       )}
 

@@ -13,6 +13,7 @@ import { ConversationListItem } from './ConversationListItem';
 import { DeleteConversationModal } from './DeleteConversationModal';
 import { useConversations } from '../hooks/useConversations';
 import { useAuth } from '../../auth/hooks/useAuth';
+import { BhashaLogo } from '../../../components/common/BhashaLogo';
 
 interface ConversationSidebarProps {
   conversations: Conversation[];
@@ -142,8 +143,34 @@ export function ConversationSidebar({
 
   return (
     <aside className="w-64 sm:w-72 h-full flex flex-col bg-white border-r border-[#E5E1D8] select-none text-[#252923]">
-      {/* 1. TOP HEADER: "New Chat" Action */}
-      <div className="p-3 border-b border-[#E5E1D8] flex items-center justify-between gap-2 shrink-0 bg-white">
+      {/* 0. BRAND IDENTITY HEADER */}
+      <div className="px-3.5 pt-3 pb-2 flex items-center justify-between gap-2 bg-white shrink-0">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <BhashaLogo className="w-7 h-7 rounded-lg shrink-0 shadow-2xs" />
+          <div className="min-w-0">
+            <h1 className="text-xs font-bold text-[#102A24] tracking-tight leading-none truncate">
+              BhashaAgent
+            </h1>
+            <p className="text-[10px] text-[#252923]/60 leading-tight truncate mt-0.5">
+              Multilingual Assistant
+            </p>
+          </div>
+        </div>
+
+        {onClose && (
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close sidebar"
+            className="p-1.5 text-[#252923]/60 hover:text-[#102A24] hover:bg-[#F7F6F1] rounded-lg transition-colors md:hidden cursor-pointer"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        )}
+      </div>
+
+      {/* 1. "New Chat" Action */}
+      <div className="px-3 pb-3 border-b border-[#E5E1D8] flex items-center justify-between gap-2 shrink-0 bg-white">
         <button
           type="button"
           onClick={() => void handleNewChat()}
@@ -157,17 +184,6 @@ export function ConversationSidebar({
           )}
           <span>{isCreatingNew ? 'Creating...' : 'New Chat'}</span>
         </button>
-
-        {onClose && (
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close sidebar"
-            className="p-2 text-[#252923]/60 hover:text-[#102A24] hover:bg-[#F7F6F1] rounded-lg transition-colors md:hidden cursor-pointer"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        )}
       </div>
 
       {/* 2. SEARCH INPUT (Debounced) */}

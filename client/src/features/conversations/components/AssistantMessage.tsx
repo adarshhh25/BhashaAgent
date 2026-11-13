@@ -1,4 +1,5 @@
-import { Languages, Wrench } from 'lucide-react';
+import { Wrench } from 'lucide-react';
+import { BhashaLogo } from '../../../components/common/BhashaLogo';
 import type { Message } from '../types/conversation.types';
 
 interface AssistantMessageProps {
@@ -48,9 +49,10 @@ export function AssistantMessage({ message }: AssistantMessageProps) {
     <div className="flex flex-col items-start gap-1 w-full max-w-full pr-8">
       <div className="flex items-start gap-2.5 max-w-full">
         {/* Assistant Avatar */}
-        <div className="w-6 h-6 rounded-full bg-accent/10 text-accent flex items-center justify-center shrink-0 mt-0.5 shadow-xs">
-          <Languages className="w-3.5 h-3.5" strokeWidth={1.75} />
-        </div>
+        <BhashaLogo
+          className="w-6 h-6 rounded-full shrink-0 mt-0.5 shadow-2xs"
+          alt="BhashaAgent Assistant"
+        />
 
         {/* Message bubble */}
         <div className="flex flex-col gap-1.5 max-w-full">

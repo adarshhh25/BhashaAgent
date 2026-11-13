@@ -80,31 +80,29 @@ export function ConversationHeader({
               <X className="w-3.5 h-3.5" />
             </button>
           </form>
-        ) : (
+        ) : conversation ? (
           <div className="flex items-center gap-1.5 min-w-0">
             <h2 className="text-xs font-semibold text-text-primary truncate">
-              {conversation?.title ?? 'BhashaAgent'}
+              {conversation.title || 'Conversation'}
             </h2>
-            {conversation && (
-              <button
-                type="button"
-                onClick={() => {
-                  setTitleDraft(conversation.title ?? '');
-                  setIsEditingTitle(true);
-                }}
-                title="Rename conversation"
-                className="p-1 text-text-placeholder hover:text-text-primary rounded"
-              >
-                <Pencil className="w-3 h-3" />
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={() => {
+                setTitleDraft(conversation.title ?? '');
+                setIsEditingTitle(true);
+              }}
+              title="Rename conversation"
+              className="p-1 text-text-placeholder hover:text-text-primary rounded"
+            >
+              <Pencil className="w-3 h-3" />
+            </button>
             {isArchived && (
               <span className="text-[10px] font-medium bg-black/5 text-text-secondary px-1.5 py-0.5 rounded">
                 Archived
               </span>
             )}
           </div>
-        )}
+        ) : null}
       </div>
 
       {/* Right: Actions */}
