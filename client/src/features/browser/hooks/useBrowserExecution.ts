@@ -80,8 +80,8 @@ export function useBrowserExecution(task: FormTask | null): UseBrowserExecutionR
         return false;
       }
 
-      if (task.status !== 'APPROVED_FOR_FILLING') {
-        setError('Task must be approved for filling before execution can begin');
+      if (['COMPLETED', 'CANCELLED', 'FAILED'].includes(task.status)) {
+        setError(`Cannot execute task in ${task.status} status`);
         return false;
       }
 

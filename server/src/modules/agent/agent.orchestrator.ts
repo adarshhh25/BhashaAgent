@@ -1,5 +1,6 @@
 import { HttpError } from "../../common/errors";
 import { LLMError } from "../llm/llm.errors";
+import { config } from "../../config/environment";
 import { parseAgentOutput, sanitizeResponseText } from "./agent.validator";
 import { systemPrompt } from "./agent.prompt";
 import { findTool, toolDefinitions } from "./agent.tools";
@@ -7,7 +8,9 @@ import { detectConversationLanguage, isDevanagari } from "./language-detector";
 import type { AgentContext } from "../context/context.types";
 import type { LLMProvider, LLMMessage } from "../llm/llm.types";
 import type { AgentLLMOutput, AgentTurnResult } from "./agent.types";
-import { logLLMEvent, logLLMTurnSummary, type LLMValidationStatus } from "../llm/llm-logger";
+import { logLLMEvent, logLLMTurnSummary, logObservabilityEvent, type LLMValidationStatus } from "../llm/llm-logger";
+import { routeFormAction } from "../form-intelligence/form-action-router";
+import { setFieldValue } from "../form-tasks/form-task.service";
 
 const MAX_ITERATIONS = 3;
 const MAX_TOOL_CALLS = 4;
@@ -36,7 +39,33 @@ export function sanitizeFalseExecutionClaims(
   const userAuthorizedProfile =
     /\b(profile|saved|मेरी प्रोफाइल|माझी प्रोफाईल|माझे तपशील|saved details|use saved|fill from profile)\b/i.test(userContent);
 
-  if (containsFabricatedName && !userMentionedName && !userAuthorizedProfile) {
+  const nameInToolResults = toolResults.some(
+    (tr) =>
+      tr.success &&
+      tr.data &&
+      typeof tr.data === "object" &&
+      (/\b(adarsh jha|adarsh)\b/i.test(String((tr.data as any).value || "")) ||
+        /आदर्श झा|आदर्श/i.test(String((tr.data as any).value || ""))),
+  );
+  const nameInExistingFields = fields.some(
+    (f) =>
+      /\b(adarsh jha|adarsh)\b/i.test(String(f.collectedValue || (f as any).currentValue || "")) ||
+      /आदर्श झा|आदर्श/i.test(String(f.collectedValue || (f as any).currentValue || "")),
+  );
+  const nameInRecentMessages = (context.conversation?.recentMessages || []).some(
+    (m) =>
+      /\b(adarsh jha|adarsh)\b/i.test(m.content || "") ||
+      /आदर्श झा|आदर्श/i.test(m.content || ""),
+  );
+
+  if (
+    containsFabricatedName &&
+    !userMentionedName &&
+    !userAuthorizedProfile &&
+    !nameInToolResults &&
+    !nameInExistingFields &&
+    !nameInRecentMessages
+  ) {
     console.warn(`[AgentOrchestrator] Intercepted fabricated name in response: "${text}"`);
     if (detectedLang === "hi") {
       return "मैं इस फ़ॉर्म को पूरा करने में आपकी मदद कर सकता हूँ। शुरुआत करने के लिए, कृपया कस्टमर का नाम बताइए?";
@@ -49,35 +78,43 @@ export function sanitizeFalseExecutionClaims(
     }
   }
 
-  // Check 2: False execution claim on webpage DOM
-  const claimsFilledHindi = /मैंने (?:.+?) भर दिया है|डाल दिया है|सेलेक्ट कर दिया है/i.test(text);
-  const claimsFilledEnglish = /I have (?:filled|entered|selected)|I've (?:filled|entered|selected)/i.test(text);
-  const claimsFilledMarathi = /मी (?:.+?) भरले आहे|भरून दिले आहे/i.test(text);
-  const claimsFilledHinglish = /Maine (?:.+?) fill kar diya hai/i.test(text);
+  // Check 2: False execution claim on webpage DOM (active and passive claims)
+  const claimsFilledHindi = /मैंने (?:.+?) (?:भर दिया है|डाल दिया है|सेलेक्ट कर दिया है|अपडेट कर दिया है|कर दिया है)|(?:सभी|सारे)\s+(?:टॉपिंग्स?|विकल्प|फ़ील्ड्स?)\s+(?:चुन\s+लिए|सिलेक्ट\s+हो\s+गए|चुने\s+हुए\s+हैं)/i.test(text);
+  const claimsFilledEnglish = /I have (?:filled|entered|selected|updated)|I've (?:filled|entered|selected|updated)|(?:all\s+)?(?:pizza\s+)?(?:toppings?|options?|fields?|boxes?)\s+(?:are|have\s+been|were)\s+(?:already\s+)?(?:selected|checked|filled|updated)/i.test(text);
+  const claimsFilledMarathi = /मी (?:.+?) (?:भरले आहे|भरून दिले आहे|अपडेट केले आहे|केले आहे)|(?:सर्व|सगळे)\s+(?:टॉपिंग्स?|पर्याय)\s+(?:निवडले\s+आहेत|सिलेक्ट\s+झाले\s+आहेत)/i.test(text);
+  const claimsFilledHinglish = /Maine (?:.+?) (?:fill kar diya|update kar diya|kar diya)|(?:saare|sabhi)\s+(?:toppings?|options?)\s+(?:already\s+)?(?:select|check)\s+(?:ho\s+gaye|hain|kar\s+diye)/i.test(text);
 
   const anyVerified = fields.some((f) => f.isVerified === true);
+  const hasDirectExecution = toolResults.some(
+    (tr) =>
+      tr.success &&
+      tr.name === "propose_field_value" &&
+      tr.data &&
+      typeof tr.data === "object" &&
+      (tr.data as any).status === "APPROVED",
+  );
 
-  if (!anyVerified && (claimsFilledHindi || claimsFilledEnglish || claimsFilledMarathi || claimsFilledHinglish)) {
+  if (!anyVerified && !hasDirectExecution && (claimsFilledHindi || claimsFilledEnglish || claimsFilledMarathi || claimsFilledHinglish)) {
     // If a tool was executed in this turn, the detail was COLLECTED/NOTED
     if (toolResults.length > 0 && toolResults.some((tr) => tr.success)) {
       text = text
-        .replace(/मैंने (.+?) भर दिया है।?/g, "मैंने $1 नोट कर लिया है।")
+        .replace(/मैंने (.+?) (?:भर दिया है|अपडेट कर दिया है|कर दिया है)।?/g, "मैंने $1 नोट कर लिया है।")
         .replace(/मैंने (.+?) भर दिया।?/g, "मैंने $1 नोट कर लिया है।")
-        .replace(/I have filled ([^.]+)\./gi, "I've noted $1.")
-        .replace(/I've filled ([^.]+)\./gi, "I've noted $1.")
-        .replace(/मी (.+?) भरले आहे।?/g, "मी $1 नोंदवून घेतले आहे.")
-        .replace(/Maine (.+?) fill kar diya hai\.?/gi, "Maine $1 note kar liya hai.");
+        .replace(/I have (?:filled|updated) ([^.]+)\./gi, "I've noted $1.")
+        .replace(/I've (?:filled|updated) ([^.]+)\./gi, "I've noted $1.")
+        .replace(/मी (.+?) (?:भरले आहे|अपडेट केले आहे)।?/g, "मी $1 नोंदवून घेतले आहे.")
+        .replace(/Maine (.+?) (?:fill|update) kar diya(?: hai)?\.?/gi, "Maine $1 note kar liya hai.");
     } else {
       // No tool was executed, and nothing was verified. If it still claims to have filled, sanitize:
       console.warn(`[AgentOrchestrator] Intercepted false execution claim without tool execution: "${text}"`);
       if (detectedLang === "hi") {
-        return "मैंने फ़ॉर्म के विवरण देख लिए हैं। कृपया बताइए कि आप कौन सा विवरण भरना चाहते हैं?";
+        return "मैंने आपकी जानकारी नोट कर ली है। फ़ॉर्म में यह विवरण भरने के लिए कृपया फ़ील्ड कन्फर्म करें।";
       } else if (detectedLang === "mr") {
-        return "मी फॉर्मचे तपशील पाहिले आहेत. कृपया सांगा की तुम्हाला कोणता तपशील भरायचा आहे?";
+        return "मी तुमची माहिती नोंदवून घेतली आहे. फॉर्ममध्ये ही माहिती भरण्यासाठी कृपया कन्फर्म करा.";
       } else if (detectedLang === "hinglish") {
-        return "Maine form details dekh liye hain. Aap kaunsa detail pehle bharna chahte hain?";
+        return "Maine details note kar li hain. Form mein update karne ke liye please confirm karein.";
       } else {
-        return "I can see the form. Which detail would you like me to note first?";
+        return "I've noted your detail. Please confirm to update this field on the active webpage.";
       }
     }
   }
@@ -100,10 +137,15 @@ export async function orchestrate(
   userId: string,
   context: AgentContext,
   provider: LLMProvider,
+  options?: { signal?: AbortSignal },
 ): Promise<AgentTurnResult> {
   const requestId = context.request?.requestId || `req_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
   const conversationId = context.conversation?.id || "unknown";
   const turnStartTime = Date.now();
+
+  const configuredModel = config.gemini.model || "gemini-2.5-flash";
+  const selectedModel = configuredModel;
+  let cancellationStatus: "not_cancelled" | "cancelled_by_client" | "timeout" = "not_cancelled";
 
   let effectiveModel = "unknown";
   let effectiveProvider = "gemini";
@@ -123,6 +165,13 @@ export async function orchestrate(
   let failureReason: string | undefined;
 
   try {
+    if (options?.signal?.aborted) {
+      cancellationStatus = "cancelled_by_client";
+      failureStage = "cancelled";
+      failureReason = "REQUEST_CANCELLED";
+      throw new HttpError(499, "REQUEST_CANCELLED", "Turn was cancelled by client before dispatch");
+    }
+
     const detectedTurnLang = detectConversationLanguage(
       context.request.currentUserMessage.content || "",
       context.request.currentUserMessage.language || context.user?.preferredLanguage || "en",
@@ -148,6 +197,281 @@ export async function orchestrate(
     let toolsExecuted = false;
     let recoveryAttempts = 0;
 
+    // --- PROVIDER-INDEPENDENT FORM ACTION ROUTING ---
+    if (context.formTask?.id && context.formTask.detectedFields && context.formTask.detectedFields.length > 0) {
+      failureStage = "pre_orchestration";
+      const routed = routeFormAction({
+        content: context.request?.currentUserMessage?.content || "",
+        detectedFields: context.formTask.detectedFields,
+        approvedMemories: context.profileMemory?.approvedFacts,
+        detectedLang: detectedTurnLang,
+        conversationId,
+        requestId,
+        recentMessages: context.conversation?.recentMessages,
+      });
+      failureStage = undefined;
+
+      if (routed.type === "CONVERSATIONAL_RESPONSE") {
+        finalResponseSuccess = true;
+        providerSuccess = true;
+        validationStatus = "valid";
+        failureStage = undefined;
+        failureReason = undefined;
+        return {
+          response: routed.response,
+          intent: { primary: routed.intent as any, secondary: [], confidence: 1.0 },
+          language: { detected: detectedTurnLang, responseLanguage: detectedTurnLang },
+          decision: { type: "respond" },
+          context,
+          toolResults: [],
+        };
+      }
+
+      if (routed.type === "FORM_UPDATE") {
+        if (routed.status === "AMBIGUOUS") {
+          finalResponseSuccess = true;
+          providerSuccess = true;
+          validationStatus = "valid";
+          failureStage = undefined;
+          failureReason = undefined;
+          return {
+            response: routed.clarificationQuestion,
+            intent: { primary: "AMBIGUOUS_INSTRUCTION", secondary: [], confidence: 0.9 },
+            language: { detected: detectedTurnLang, responseLanguage: detectedTurnLang },
+            decision: { type: "clarify", reason: "Multiple matching fields detected" },
+            context,
+            toolResults: [],
+          };
+        }
+        if (routed.status === "OPTION_NOT_FOUND") {
+          finalResponseSuccess = true;
+          providerSuccess = true;
+          validationStatus = "valid";
+          failureStage = undefined;
+          failureReason = undefined;
+          return {
+            response: routed.clarificationMessage,
+            intent: { primary: "ASK_ABOUT_FORM_FIELD", secondary: [], confidence: 0.9 },
+            language: { detected: detectedTurnLang, responseLanguage: detectedTurnLang },
+            decision: { type: "clarify", reason: "Requested option not found for field" },
+            context,
+            toolResults: [],
+          };
+        }
+        if (routed.status === "NO_FIELD_MATCH") {
+          finalResponseSuccess = true;
+          providerSuccess = true;
+          validationStatus = "valid";
+          failureStage = undefined;
+          failureReason = undefined;
+          return {
+            response: routed.clarificationQuestion,
+            intent: { primary: "ASK_ABOUT_FORM_FIELD", secondary: [], confidence: 0.9 },
+            language: { detected: detectedTurnLang, responseLanguage: detectedTurnLang },
+            decision: { type: "clarify", reason: "No matching field found in active form" },
+            context,
+            toolResults: [],
+          };
+        }
+        if (routed.status === "RESOLVED") {
+          finalResponseSuccess = true;
+          providerSuccess = true;
+          validationStatus = "valid";
+          failureStage = undefined;
+          failureReason = undefined;
+          const updates = routed.updates && routed.updates.length > 0 ? routed.updates : [{
+            field: routed.field,
+            value: routed.value,
+            resolvedValue: routed.resolvedValue,
+            confidence: routed.confidence,
+            intentReason: routed.intentReason,
+          }];
+
+          const confirmedFields: string[] = [];
+          for (let uIdx = 0; uIdx < updates.length; uIdx += 1) {
+            const upd = updates[uIdx];
+            const proposed = await setFieldValue(userId, context.formTask.id, upd.field.id, {
+              value: upd.resolvedValue as never,
+              source: "USER_PROVIDED",
+              confidence: upd.confidence,
+            });
+            logObservabilityEvent("FORM_PROPOSAL_CREATED", {
+              conversationId,
+              taskId: context.formTask.id,
+              fieldId: upd.field.id,
+              proposalId: proposed.id,
+              status: proposed.status,
+            });
+
+            const detCallId = `det_${Date.now()}_${uIdx}`;
+            toolResults.push({
+              toolCallId: detCallId,
+              name: "propose_field_value",
+              success: true,
+              data: {
+                id: proposed.id,
+                fieldId: upd.field.id,
+                fieldIdentifier: upd.field.fieldIdentifier,
+                label: upd.field.label,
+                inputType: upd.field.inputType,
+                value: upd.resolvedValue,
+                status: proposed.status,
+                executionStatus: proposed.executionStatus,
+                redacted: upd.field.inputType.toLowerCase() === "password",
+              },
+            });
+
+            confirmedFields.push(`${upd.field.label || upd.field.fieldIdentifier} as ${String(upd.resolvedValue)}`);
+          }
+          toolsExecuted = true;
+
+          // Find the next empty field in the form task to guide user naturally
+          const updatedFieldIds = new Set(updates.map((u) => u.field.id));
+          const nextEmptyField = context.formTask.detectedFields.find(
+            (f) => !updatedFieldIds.has(f.id) && f.isEmpty,
+          );
+
+          let confirmText = "";
+          const summaryStr = confirmedFields.join(", ");
+
+          if (routed.intentReason === "CONVERT_FIELD_SCRIPT") {
+            const f = updates[0]?.field;
+            const fName = f?.label || f?.fieldIdentifier || "Customer name";
+            const val = String(updates[0]?.resolvedValue || "");
+            const nextSuffixHi = nextEmptyField
+              ? ` अब आप ${nextEmptyField.label || nextEmptyField.fieldIdentifier} बता सकते हैं।`
+              : "";
+            const nextSuffixHing = nextEmptyField
+              ? ` Ab aap ${nextEmptyField.label || nextEmptyField.fieldIdentifier} bata sakte hain.`
+              : "";
+            const nextSuffixMr = nextEmptyField
+              ? ` आता तुम्ही ${nextEmptyField.label || nextEmptyField.fieldIdentifier} सांगू शकता.`
+              : "";
+            const nextSuffixEn = nextEmptyField
+              ? ` Now you can provide your ${nextEmptyField.label || nextEmptyField.fieldIdentifier}.`
+              : "";
+
+            if (detectedTurnLang === "hi") {
+              confirmText = `ठीक है, मैंने ${fName} को अंग्रेज़ी में "${val}" कर दिया है।${nextSuffixHi}`;
+            } else if (detectedTurnLang === "mr") {
+              confirmText = `ठीक आहे, मी ${fName} इंग्रजीमध्ये "${val}" केले आहे.${nextSuffixMr}`;
+            } else if (detectedTurnLang === "hinglish") {
+              confirmText = `Maine ${fName} ko English mein '${val}' update kar diya hai.${nextSuffixHing}`;
+            } else {
+              confirmText = `I've updated the ${fName} in English to "${val}".${nextSuffixEn}`;
+            }
+          } else if (routed.intentReason === "SELECT_ALL_CHECKBOXES") {
+            const nextSuffixHi = nextEmptyField
+              ? ` क्या आप ${nextEmptyField.label || nextEmptyField.fieldIdentifier} बताना चाहेंगे?`
+              : "";
+            const nextSuffixHing = nextEmptyField
+              ? ` Kya aap ${nextEmptyField.label || nextEmptyField.fieldIdentifier} batana chahenge?`
+              : "";
+            const nextSuffixMr = nextEmptyField
+              ? ` तुम्ही ${nextEmptyField.label || nextEmptyField.fieldIdentifier} सांगू इच्छिता का?`
+              : "";
+            const nextSuffixEn = nextEmptyField
+              ? ` Would you like to provide your ${nextEmptyField.label || nextEmptyField.fieldIdentifier}?`
+              : "";
+
+            if (detectedTurnLang === "hi") {
+              confirmText = `मैंने सभी पिज़्ज़ा टॉपिंग्स चुन ली हैं।${nextSuffixHi}`;
+            } else if (detectedTurnLang === "mr") {
+              confirmText = `मी सर्व पिझ्झा टॉपिंग्स निवडल्या आहेत.${nextSuffixMr}`;
+            } else if (detectedTurnLang === "hinglish") {
+              confirmText = `Maine saare pizza toppings select kar diye hain.${nextSuffixHing}`;
+            } else {
+              confirmText = `I've selected all pizza toppings.${nextSuffixEn}`;
+            }
+          } else if (nextEmptyField) {
+            const nextName = nextEmptyField.label || nextEmptyField.fieldIdentifier;
+            if (detectedTurnLang === "hi") {
+              confirmText = `मैंने ${summaryStr} अपडेट कर दिया है। क्या आप अपना ${nextName} बताना चाहेंगे?`;
+            } else if (detectedTurnLang === "mr") {
+              confirmText = `मी ${summaryStr} अपडेट केले आहे. तुम्ही तुमचा ${nextName} सांगू इच्छिता का?`;
+            } else if (detectedTurnLang === "hinglish") {
+              confirmText = `Maine ${summaryStr} update kar diya hai. Kya aap apna ${nextName} batana chahenge?`;
+            } else {
+              confirmText = `I've updated your ${summaryStr}. Would you like to provide your ${nextName}?`;
+            }
+          } else {
+            if (detectedTurnLang === "hi") {
+              confirmText = `मैंने ${summaryStr} अपडेट कर दिया है। फ़ॉर्म के सभी विवरण दर्ज हो गए हैं।`;
+            } else if (detectedTurnLang === "mr") {
+              confirmText = `मी ${summaryStr} अपडेट केले आहे. फॉर्मचे सर्व तपशील नोंदवले गेले आहेत.`;
+            } else if (detectedTurnLang === "hinglish") {
+              confirmText = `Maine ${summaryStr} update kar diya hai. Form ke saare details complete ho gaye hain.`;
+            } else {
+              confirmText = `I've updated ${summaryStr}. All required form details are complete!`;
+            }
+          }
+
+          // Try LLM for natural phrasing, unless deterministic script conversion or select all checkboxes is active
+          if (routed.intentReason !== "CONVERT_FIELD_SCRIPT" && routed.intentReason !== "SELECT_ALL_CHECKBOXES") {
+            try {
+              for (let uIdx = 0; uIdx < updates.length; uIdx += 1) {
+                const upd = updates[uIdx];
+                const detCallId = toolResults[uIdx].toolCallId;
+                messages.push({
+                  role: "assistant",
+                  content: null,
+                  toolCalls: [{
+                    id: detCallId,
+                    name: "propose_field_value",
+                    arguments: JSON.stringify({
+                      taskId: context.formTask.id,
+                      fieldId: upd.field.id,
+                      value: upd.resolvedValue,
+                      source: "USER_PROVIDED",
+                    }),
+                  }],
+                });
+                messages.push({
+                  role: "tool",
+                  toolCallId: detCallId,
+                  content: JSON.stringify({
+                    success: true,
+                    data: toolResults[uIdx].data,
+                    mandatoryDirective: `Field ${upd.field.label || upd.field.fieldIdentifier} was already updated to ${String(upd.resolvedValue)}. Output final decision JSON confirming this in ${detectedTurnLang.toUpperCase()}.`,
+                  }),
+                });
+              }
+
+              const resp = await provider.generateResponse({
+                messages,
+                tools: [],
+                toolChoice: "none",
+                maxOutputTokens: 500,
+                requestId,
+                conversationId,
+                signal: options?.signal,
+              });
+
+              if (resp.content) {
+                const parsed = parseAgentOutput(resp.content, detectedTurnLang);
+                if (parsed.responseDraft && !parsed.responseDraft.includes('"intent"')) {
+                  confirmText = sanitizeResponseText(parsed.responseDraft, detectedTurnLang);
+                }
+              }
+            } catch (llmErr) {
+              console.log(`[AgentOrchestrator] Provider follow-up skipped or failed, using deterministic confirmation:`, (llmErr as Error)?.message || llmErr);
+            }
+          }
+
+          confirmText = sanitizeFalseExecutionClaims(confirmText, context, detectedTurnLang, toolResults);
+
+          return {
+            response: confirmText,
+            intent: { primary: "PROVIDE_FIELD_INFORMATION", secondary: [], confidence: 1.0 },
+            language: { detected: detectedTurnLang, responseLanguage: detectedTurnLang },
+            decision: { type: "respond" },
+            context,
+            toolResults,
+          };
+        }
+      }
+    }
+
     for (let iteration = 0; iteration < MAX_ITERATIONS; iteration += 1) {
       let response;
       const canUseTools = !toolsExecuted && (iteration === 0 || recoveryAttempts > 0);
@@ -161,16 +485,24 @@ export async function orchestrate(
           maxOutputTokens,
           requestId,
           conversationId,
+          signal: options?.signal,
         });
       } catch (error) {
+        if (options?.signal?.aborted || (error instanceof LLMError && error.code === "REQUEST_CANCELLED")) {
+          cancellationStatus = "cancelled_by_client";
+          failureStage = "cancelled";
+          failureReason = "REQUEST_CANCELLED";
+          throw new HttpError(499, "REQUEST_CANCELLED", "Turn was cancelled by client");
+        }
         if (iteration === 0 && error instanceof LLMError && error.code === "PROVIDER_UNAVAILABLE") {
           try {
             response = await provider.generateResponse({
               messages,
-              tools: [],
-              toolChoice: "none",
+              tools: toolsExecuted || canUseTools ? toolDefinitions : [],
+              toolChoice: canUseTools ? "auto" : "none",
               requestId,
               conversationId,
+              signal: options?.signal,
             });
           } catch (retryError) {
             failureStage = "provider_call";
@@ -180,19 +512,33 @@ export async function orchestrate(
         } else {
           failureStage = "provider_call";
           failureReason = error instanceof LLMError ? error.code : "PROVIDER_ERROR";
+          if ((error as any)?.modelsAttempted && Array.isArray((error as any).modelsAttempted)) {
+            for (const m of (error as any).modelsAttempted) {
+              if (!modelsAttempted.includes(m)) modelsAttempted.push(m);
+            }
+          }
+          if (typeof (error as any)?.attemptCount === "number") {
+            totalAttemptCount = Math.max(totalAttemptCount, (error as any).attemptCount);
+          }
           providerError(error);
         }
       }
 
       providerSuccess = true;
-      if (response.model && !modelsAttempted.includes(response.model)) {
+      if (response.modelsAttempted && Array.isArray(response.modelsAttempted)) {
+        for (const m of response.modelsAttempted) {
+          if (!modelsAttempted.includes(m)) modelsAttempted.push(m);
+        }
+      } else if (response.model && !modelsAttempted.includes(response.model)) {
         modelsAttempted.push(response.model);
       }
       if (response.provider) effectiveProvider = response.provider;
       totalAttemptCount += (response.attemptCount || 1);
       if (response.fallbackUsed) fallbackUsed = true;
       if (response.fallbackReasons && response.fallbackReasons.length > 0) {
-        fallbackReasons.push(...response.fallbackReasons);
+        for (const r of response.fallbackReasons) {
+          if (!fallbackReasons.includes(r)) fallbackReasons.push(r);
+        }
       }
 
       if (response.toolCalls.length === 0) {
@@ -448,10 +794,22 @@ export async function orchestrate(
         toolCalls: response.toolCalls,
       });
 
+      if (options?.signal?.aborted) {
+        cancellationStatus = "cancelled_by_client";
+        failureStage = "cancelled";
+        failureReason = "REQUEST_CANCELLED";
+        throw new HttpError(499, "REQUEST_CANCELLED", "Turn was cancelled before tool execution");
+      }
+
       for (const call of response.toolCalls) {
         if (toolResults.some((result) => result.toolCallId === call.id)) continue;
         const tool = findTool(call.name);
         if (!tool) {
+          logObservabilityEvent("PROVIDER_TOOL_CALL_FAILED", {
+            conversationId,
+            tool: call.name,
+            reason: "UNKNOWN_TOOL",
+          });
           failureStage = "tool_validation";
           failureReason = "UNKNOWN_TOOL";
           throw new HttpError(400, "UNKNOWN_TOOL", "The requested operation is not available");
@@ -461,6 +819,11 @@ export async function orchestrate(
           try {
             argumentsValue = JSON.parse(call.arguments);
           } catch {
+            logObservabilityEvent("PROVIDER_TOOL_CALL_FAILED", {
+              conversationId,
+              tool: call.name,
+              reason: "INVALID_TOOL_ARGUMENTS_JSON",
+            });
             logLLMEvent("Tool arguments invalid", {
               requestId,
               tool: call.name,
@@ -498,6 +861,11 @@ export async function orchestrate(
             }),
           });
         } catch (toolExecErr) {
+          logObservabilityEvent("PROVIDER_TOOL_CALL_FAILED", {
+            conversationId,
+            tool: call.name,
+            reason: (toolExecErr as any)?.message || "EXECUTION_ERROR",
+          });
           console.warn(`[AgentOrchestrator] Failed executing tool ${call.name}:`, toolExecErr);
           logLLMEvent("Tool execution completed", {
             requestId,
@@ -516,6 +884,12 @@ export async function orchestrate(
     failureReason = "AGENT_ITERATION_LIMIT";
     throw new HttpError(409, "AGENT_ITERATION_LIMIT", "The assistant could not complete this request safely");
   } catch (error: any) {
+    if (options?.signal?.aborted || (error instanceof LLMError && error.code === "REQUEST_CANCELLED") || (error instanceof HttpError && error.code === "REQUEST_CANCELLED")) {
+      cancellationStatus = "cancelled_by_client";
+      failureStage = "cancelled";
+      failureReason = "REQUEST_CANCELLED";
+      throw new HttpError(499, "REQUEST_CANCELLED", "Turn was cancelled by client");
+    }
     if (!failureStage) {
       failureStage = "orchestration";
       failureReason = error instanceof HttpError ? error.code : error?.message || "ORCHESTRATION_ERROR";
@@ -526,8 +900,15 @@ export async function orchestrate(
       requestId,
       conversationId,
       provider: effectiveProvider,
-      effectiveModel: effectiveModel !== "unknown" ? effectiveModel : "none",
-      attemptCount: Math.max(1, totalAttemptCount),
+      requestedProvider: config.llm.provider || "gemini",
+      requestedModel: configuredModel,
+      attemptedProvider: provider?.constructor?.name?.toLowerCase().includes("gemini") ? "gemini" : (config.llm.provider || "gemini"),
+      attemptedModel: selectedModel,
+      effectiveProvider,
+      configuredModel,
+      selectedModel,
+      effectiveModel: effectiveModel !== "unknown" ? effectiveModel : (finalResponseSuccess ? "deterministic_router" : "none"),
+      attemptCount: totalAttemptCount,
       fallbackUsed,
       fallbackReasons,
       modelsAttempted: modelsAttempted.length > 0 ? modelsAttempted : undefined,
@@ -536,12 +917,15 @@ export async function orchestrate(
       providerSuccess,
       parseSuccess,
       structuredResponseValid,
+      responseValidationSuccess: structuredResponseValid,
       validationStatus,
       toolCallCount: totalToolCallCount,
       finalResponseSuccess,
       totalLatencyMs: Date.now() - turnStartTime,
+      cancellationStatus,
       failureStage: finalResponseSuccess ? undefined : failureStage,
       failureReason: finalResponseSuccess ? undefined : failureReason,
+      failureCategory: failureReason,
     });
   }
 }

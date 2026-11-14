@@ -1,4 +1,4 @@
-import { Pencil, Check, X, Loader2 } from 'lucide-react';
+import { Pencil, X, Loader2 } from 'lucide-react';
 import type { DetectedField } from '../types/form.types';
 import { FieldConfidenceIndicator } from './FieldConfidenceIndicator';
 import { FieldSourceIndicator } from './FieldSourceIndicator';
@@ -7,7 +7,7 @@ interface FormFieldCardProps {
   field: DetectedField;
   isProcessing: boolean;
   onEdit: (field: DetectedField) => void;
-  onApprove: (fieldId: string) => Promise<void>;
+  onApprove?: (fieldId: string) => Promise<void>;
   onReject: (fieldId: string) => Promise<void>;
 }
 
@@ -26,14 +26,10 @@ export function FormFieldCard({
   field,
   isProcessing,
   onEdit,
-  onApprove,
   onReject,
 }: FormFieldCardProps) {
   const currentValueRecord = field.fieldValues?.[0];
   const valueDisplay = currentValueRecord ? stringifyValue(currentValueRecord.value) : '';
-  const isApproved = currentValueRecord?.status === 'APPROVED';
-  const isRejected = currentValueRecord?.status === 'REJECTED';
-  const isPending = currentValueRecord?.status === 'PENDING_APPROVAL' || currentValueRecord?.status === 'PROPOSED';
   const hasValue = Boolean(valueDisplay);
 
   const getStatusBadge = () => {
@@ -44,30 +40,16 @@ export function FormFieldCard({
         </span>
       );
     }
-    if (isApproved) {
+    if (currentValueRecord?.executionStatus === 'FILLED') {
       return (
         <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-success/15 text-success">
-          Approved
-        </span>
-      );
-    }
-    if (isRejected) {
-      return (
-        <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-danger/15 text-danger">
-          Rejected
-        </span>
-      );
-    }
-    if (isPending) {
-      return (
-        <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-warning/15 text-warning">
-          Needs Review
+          Filled
         </span>
       );
     }
     return (
-      <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-accent/10 text-accent">
-        Mapped
+      <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-accent/15 text-accent">
+        Ready
       </span>
     );
   };
@@ -132,38 +114,21 @@ export function FormFieldCard({
             <span>{hasValue ? 'Edit' : 'Provide'}</span>
           </button>
 
-          {/* Approve / Reject buttons if pending */}
-          {hasValue && !isApproved && (
-            <>
-              <button
-                type="button"
-                onClick={() => void onReject(field.id)}
-                disabled={isProcessing}
-                title="Reject field value"
-                className="p-1 rounded-md text-text-placeholder hover:text-danger hover:bg-danger/10 transition-colors disabled:opacity-40"
-              >
-                {isProcessing ? (
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                ) : (
-                  <X className="w-3.5 h-3.5" />
-                )}
-              </button>
-
-              <button
-                type="button"
-                onClick={() => void onApprove(field.id)}
-                disabled={isProcessing}
-                title="Approve field value"
-                className="flex items-center gap-1 px-2.5 py-1 rounded-md bg-accent text-white text-xs font-medium hover:bg-accent/90 transition-all shadow-2xs disabled:opacity-40"
-              >
-                {isProcessing ? (
-                  <Loader2 className="w-3 h-3 animate-spin" />
-                ) : (
-                  <Check className="w-3 h-3" />
-                )}
-                <span>Approve</span>
-              </button>
-            </>
+          {/* Reject / Clear button */}
+          {hasValue && (
+            <button
+              type="button"
+              onClick={() => void onReject(field.id)}
+              disabled={isProcessing}
+              title="Clear field value"
+              className="p-1 rounded-md text-text-placeholder hover:text-danger hover:bg-danger/10 transition-colors disabled:opacity-40"
+            >
+              {isProcessing ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <X className="w-3.5 h-3.5" />
+              )}
+            </button>
           )}
         </div>
       </div>

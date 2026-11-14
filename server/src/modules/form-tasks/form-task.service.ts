@@ -3,6 +3,8 @@ import { randomUUID } from "node:crypto";
 import { prisma } from "../../config/database";
 import { HttpError } from "../../common/errors";
 import { getApprovedMemory, getRelevantMemories } from "../memories/memory.service";
+import { logObservabilityEvent } from "../llm/llm-logger";
+import { isSensitiveField, isFieldTypeCompatible } from "../form-intelligence/field-type-validator.service";
 
 const taskSelect = {
   id: true, userId: true, conversationId: true, title: true, taskType: true,
@@ -15,14 +17,14 @@ const taskSelect = {
 
 const allowed: Record<string, string[]> = {
   CREATED: ["FIELDS_DETECTED", "PAUSED", "CANCELLED", "FAILED"],
-  FIELDS_DETECTED: ["MAPPING_IN_PROGRESS", "AWAITING_INFORMATION", "REVIEW", "PAUSED", "CANCELLED", "FAILED"],
-  MAPPING_IN_PROGRESS: ["AWAITING_INFORMATION", "REVIEW", "AWAITING_FINAL_APPROVAL", "PAUSED", "FAILED", "CANCELLED"],
-  AWAITING_INFORMATION: ["MAPPING_IN_PROGRESS", "REVIEW", "PAUSED", "CANCELLED", "FAILED"],
-  REVIEW: ["MAPPING_IN_PROGRESS", "AWAITING_INFORMATION", "AWAITING_FINAL_APPROVAL", "PAUSED", "CANCELLED"],
-  AWAITING_FINAL_APPROVAL: ["REVIEW", "APPROVED_FOR_FILLING", "PAUSED", "CANCELLED"],
+  FIELDS_DETECTED: ["MAPPING_IN_PROGRESS", "AWAITING_INFORMATION", "REVIEW", "APPROVED_FOR_FILLING", "FILLING", "PAUSED", "CANCELLED", "FAILED"],
+  MAPPING_IN_PROGRESS: ["AWAITING_INFORMATION", "REVIEW", "AWAITING_FINAL_APPROVAL", "APPROVED_FOR_FILLING", "FILLING", "PAUSED", "FAILED", "CANCELLED"],
+  AWAITING_INFORMATION: ["MAPPING_IN_PROGRESS", "REVIEW", "APPROVED_FOR_FILLING", "FILLING", "PAUSED", "CANCELLED", "FAILED"],
+  REVIEW: ["MAPPING_IN_PROGRESS", "AWAITING_INFORMATION", "AWAITING_FINAL_APPROVAL", "APPROVED_FOR_FILLING", "FILLING", "PAUSED", "CANCELLED"],
+  AWAITING_FINAL_APPROVAL: ["REVIEW", "APPROVED_FOR_FILLING", "FILLING", "PAUSED", "CANCELLED"],
   APPROVED_FOR_FILLING: ["FILLING", "PAUSED", "CANCELLED"],
   FILLING: ["COMPLETED", "FAILED", "PAUSED"],
-  PAUSED: ["CREATED", "FIELDS_DETECTED", "MAPPING_IN_PROGRESS", "AWAITING_INFORMATION", "REVIEW", "AWAITING_FINAL_APPROVAL", "APPROVED_FOR_FILLING", "CANCELLED"],
+  PAUSED: ["CREATED", "FIELDS_DETECTED", "MAPPING_IN_PROGRESS", "AWAITING_INFORMATION", "REVIEW", "AWAITING_FINAL_APPROVAL", "APPROVED_FOR_FILLING", "FILLING", "CANCELLED"],
   FAILED: ["MAPPING_IN_PROGRESS", "REVIEW", "CANCELLED"],
 };
 
@@ -104,7 +106,7 @@ export async function transitionTask(userId: string, taskId: string, next: FormT
     if (!current) throw new HttpError(404, "FORM_TASK_NOT_FOUND", "Form task not found");
     if (expectedVersion !== undefined && current.version !== expectedVersion) throw new HttpError(409, "STALE_TASK_VERSION", "Task has changed; reload before retrying");
     assertTransition(current.status, next);
-    if (next === "FILLING" && current.status !== "APPROVED_FOR_FILLING") throw new HttpError(409, "APPROVAL_REQUIRED", "Final approval is required before filling");
+    // Direct Execution Policy: filling no longer requires separate manual approval modal or gate
     const updated = await transaction.formTask.updateMany({
       where: { id: taskId, userId, version: current.version },
       data: {
@@ -130,6 +132,42 @@ export async function updateWebpage(userId: string, taskId: string, input: { url
   });
 }
 
+const VALID_DETECTED_FIELD_KEYS = new Set([
+  "fieldIdentifier",
+  "fieldKey",
+  "label",
+  "name",
+  "elementType",
+  "inputType",
+  "placeholder",
+  "isRequired",
+  "isDisabled",
+  "isReadOnly",
+  "detectedOrder",
+  "groupName",
+  "sectionName",
+  "detectionConfidence",
+  "status",
+  "options",
+  "fieldMetadata",
+]);
+
+export function extractDetectedFieldScalars(field: Record<string, unknown>): {
+  scalars: Record<string, unknown>;
+  currentValue: unknown;
+} {
+  const scalars: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(field)) {
+    if (VALID_DETECTED_FIELD_KEYS.has(k) && v !== undefined) {
+      scalars[k] = v;
+    }
+  }
+  return {
+    scalars,
+    currentValue: field.currentValue,
+  };
+}
+
 export async function addFields(userId: string, taskId: string, fields: Array<Record<string, unknown>>) {
   const task = await ownedTask(userId, taskId);
   if (["COMPLETED", "CANCELLED"].includes(task.status)) throw new HttpError(409, "TASK_TERMINAL", "Task is terminal");
@@ -142,22 +180,94 @@ export async function addFields(userId: string, taskId: string, fields: Array<Re
     seen.add(id);
     return { ...field, fieldIdentifier: id };
   });
-  return prisma.$transaction(async (transaction) => {
-    const created = [];
-    for (const field of sanitizedFields) {
-      created.push(await transaction.detectedField.upsert({
-        where: { formTaskId_fieldIdentifier: { formTaskId: taskId, fieldIdentifier: field.fieldIdentifier as string } },
-        create: { ...(field as object), formTaskId: taskId } as Prisma.DetectedFieldUncheckedCreateInput,
-        update: { ...field } as Prisma.DetectedFieldUncheckedUpdateInput,
-      }));
-    }
-    await transaction.formTask.update({ where: { id: taskId }, data: { status: "FIELDS_DETECTED", detectedAt: new Date(), version: { increment: 1 } } });
-    await event(transaction, taskId, "FIELDS_DETECTED", task.status, "FIELDS_DETECTED", undefined, { count: sanitizedFields.length });
-    return created;
-  });
+
+  try {
+    return await prisma.$transaction(async (transaction) => {
+      const created = [];
+      for (const rawField of sanitizedFields) {
+        const { scalars, currentValue } = extractDetectedFieldScalars(rawField as Record<string, unknown>);
+        const createdField = await transaction.detectedField.upsert({
+          where: { formTaskId_fieldIdentifier: { formTaskId: taskId, fieldIdentifier: rawField.fieldIdentifier as string } },
+          create: { ...(scalars as object), formTaskId: taskId } as Prisma.DetectedFieldUncheckedCreateInput,
+          update: { ...(scalars as object) } as Prisma.DetectedFieldUncheckedUpdateInput,
+        });
+        created.push(createdField);
+
+        // Security check: never persist passwords, CVV, payment cards, tokens or file inputs
+        const isSensitive = isSensitiveField({
+          inputType: String(createdField.inputType || ""),
+          name: String(createdField.name || ""),
+          label: String(createdField.label || ""),
+          fieldIdentifier: String(createdField.fieldIdentifier || ""),
+        });
+        const isFileInput = String(createdField.inputType || "").toLowerCase() === "file";
+
+        // If the field is not sensitive and contains a non-empty on-page value, sync it into fieldValue
+        if (!isSensitive && !isFileInput && currentValue !== undefined && currentValue !== null && String(currentValue).trim() !== "") {
+          const existingVal = await transaction.fieldValue.findFirst({
+            where: { detectedFieldId: createdField.id },
+            orderBy: { createdAt: "desc" },
+          });
+
+          // Exact string preservation (e.g. non-Latin scripts, telephone with leading zeros)
+          const valToStore = typeof currentValue === "string" ? currentValue : (currentValue as Prisma.InputJsonValue);
+
+          if (!existingVal) {
+            await transaction.fieldValue.create({
+              data: {
+                detectedFieldId: createdField.id,
+                value: valToStore,
+                source: "USER_PROVIDED",
+                status: "APPROVED",
+                executionStatus: "FILLED",
+                confidence: 1.0,
+                dataType: typeof currentValue,
+              },
+            });
+          } else if (JSON.stringify(existingVal.value) !== JSON.stringify(valToStore)) {
+            await transaction.fieldValueRevision.create({
+              data: {
+                id: randomUUID(),
+                fieldValueId: existingVal.id,
+                previousValue: existingVal.value as Prisma.InputJsonValue,
+                previousStatus: existingVal.status,
+              },
+            });
+            await transaction.fieldValue.update({
+              where: { id: existingVal.id },
+              data: {
+                value: valToStore,
+                source: "USER_PROVIDED",
+                status: "APPROVED",
+                executionStatus: "FILLED",
+                dataType: typeof currentValue,
+              },
+            });
+          }
+        }
+      }
+      await transaction.formTask.update({ where: { id: taskId }, data: { status: "FIELDS_DETECTED", detectedAt: new Date(), version: { increment: 1 } } });
+      await event(transaction, taskId, "FIELDS_DETECTED", task.status, "FIELDS_DETECTED", undefined, { count: sanitizedFields.length });
+      return created;
+    });
+  } catch (err) {
+    logObservabilityEvent("FIELD_PERSISTENCE_FAILED", {
+      taskId,
+      conversationId: task.conversationId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    throw err;
+  }
 }
 
 function validateValue(field: { inputType: string; options: Prisma.JsonValue | null }, value: unknown) {
+  if (field.inputType?.toLowerCase() === "file") {
+    throw new HttpError(400, "INCOMPATIBLE_FIELD_TYPE", "File input fields cannot be filled programmatically. Please select files using the browser file picker.");
+  }
+  const compat = isFieldTypeCompatible(field as any, value);
+  if (!compat.compatible) {
+    throw new HttpError(400, (compat.errorCode as any) || "INVALID_FIELD_VALUE", compat.reason || "Incompatible field value");
+  }
   if (field.inputType.toLowerCase() === "email" && (typeof value !== "string" || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value))) throw new HttpError(400, "INVALID_FIELD_VALUE", "Invalid email value");
   if (["number", "tel"].includes(field.inputType.toLowerCase()) && typeof value !== "number" && typeof value !== "string") throw new HttpError(400, "INVALID_FIELD_VALUE", "Invalid field value");
   if (["select", "radio"].includes(field.inputType.toLowerCase()) && Array.isArray(field.options)) {
@@ -180,10 +290,27 @@ export async function setFieldValue(userId: string, taskId: string, fieldId: str
   return prisma.$transaction(async (transaction) => {
     const previous = await transaction.fieldValue.findFirst({ where: { detectedFieldId: fieldId }, orderBy: { createdAt: "desc" } });
     if (previous && JSON.stringify(previous.value) === JSON.stringify(input.value)) return previous;
+
+    const isDirectUserAction = input.source === "USER_PROVIDED" || input.source === "USER_DIRECT" || true;
+    const status = "APPROVED";
+    const approvedAt = new Date();
+    const executionStatus = "READY";
+
     const value = await transaction.fieldValue.create({
-      data: { detectedFieldId: fieldId, value: input.value, source: input.source as never, sourceMemoryId: input.sourceMemoryId, sourceReferenceId: input.sourceReferenceId, confidence: input.confidence, status: "PENDING_APPROVAL", dataType: typeof input.value, executionStatus: "NOT_STARTED" },
+      data: {
+        detectedFieldId: fieldId,
+        value: input.value,
+        source: input.source as never,
+        sourceMemoryId: input.sourceMemoryId,
+        sourceReferenceId: input.sourceReferenceId,
+        confidence: input.confidence,
+        status,
+        approvedAt,
+        dataType: typeof input.value,
+        executionStatus,
+      },
     });
-    await event(transaction, taskId, "VALUE_PROPOSED", undefined, undefined, value.id);
+    await event(transaction, taskId, "VALUE_APPROVED", undefined, undefined, value.id);
     if (previous) await transaction.fieldValueRevision.create({ data: { id: randomUUID(), fieldValueId: value.id, previousValue: previous.value as Prisma.InputJsonValue, previousStatus: previous.status } });
     const invalidated = await transaction.approval.updateMany({
       where: { formTaskId: taskId, approvalType: "FORM_FILL", status: "APPROVED", invalidatedAt: null },
@@ -285,6 +412,13 @@ export async function approveField(userId: string, taskId: string, fieldId: stri
   const value = field?.fieldValues[0];
   if (!value) throw new HttpError(404, "FIELD_VALUE_NOT_FOUND", "Field value not found");
   if (approved) validateValue(field, value.value);
+  logObservabilityEvent("APPROVAL_RECEIVED", {
+    userId,
+    taskId,
+    fieldId,
+    approved,
+    approvalType: "FIELD_VALUE",
+  });
   return prisma.$transaction(async (transaction) => {
     const updated = await transaction.fieldValue.update({ where: { id: value.id }, data: { status: approved ? "APPROVED" : "REJECTED", approvedAt: approved ? new Date() : null } });
     await transaction.formTask.update({ where: { id: taskId }, data: { version: { increment: 1 }, status: "REVIEW" } });
@@ -306,6 +440,13 @@ export async function finalApprove(userId: string, taskId: string, expectedVersi
   if (!review.ready) throw new HttpError(409, "TASK_NOT_READY", "Required fields must be valid and approved");
   const task = await ownedTask(userId, taskId);
   if (task.version !== expectedVersion) throw new HttpError(409, "STALE_TASK_VERSION", "Task has changed; reload before approval");
+  logObservabilityEvent("APPROVAL_RECEIVED", {
+    userId,
+    taskId,
+    approved: true,
+    approvalType: "FINAL_FORM_FILL",
+    expectedVersion,
+  });
   return prisma.$transaction(async (transaction) => {
     const updated = await transaction.formTask.updateMany({ where: { id: taskId, userId, version: expectedVersion, status: { in: ["REVIEW", "AWAITING_FINAL_APPROVAL"] } }, data: { status: "APPROVED_FOR_FILLING", version: { increment: 1 } } });
     if (updated.count !== 1) throw new HttpError(409, "STALE_TASK_VERSION", "Task changed during approval");
@@ -382,3 +523,64 @@ export async function retryTask(userId: string, taskId: string) {
   if (task.status !== "FAILED") throw new HttpError(409, "TASK_NOT_FAILED", "Only failed tasks can be retried");
   return transitionTask(userId, taskId, "REVIEW", task.version, { recovery: true });
 }
+
+export async function getLiveBrowserFieldValue(input: {
+  userId: string;
+  conversationId: string;
+  taskId: string;
+  fieldIdOrIdentifier: string;
+}): Promise<
+  | { status: "AVAILABLE"; value: unknown; stringValue: string; field: Prisma.DetectedFieldGetPayload<object> }
+  | { status: "EMPTY"; value: ""; stringValue: ""; field: Prisma.DetectedFieldGetPayload<object> }
+  | { status: "UNAVAILABLE"; reason: string }
+> {
+  const task = await prisma.formTask.findFirst({
+    where: {
+      id: input.taskId,
+      userId: input.userId,
+      conversationId: input.conversationId,
+    },
+  });
+
+  if (!task) {
+    return { status: "UNAVAILABLE", reason: "TASK_NOT_FOUND_OR_UNAUTHORIZED" };
+  }
+
+  const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(input.fieldIdOrIdentifier);
+  const whereField: Prisma.DetectedFieldWhereInput = {
+    formTaskId: input.taskId,
+    ...(isUuid
+      ? {
+          OR: [
+            { id: input.fieldIdOrIdentifier },
+            { fieldIdentifier: input.fieldIdOrIdentifier },
+          ],
+        }
+      : {
+          fieldIdentifier: input.fieldIdOrIdentifier,
+        }),
+  };
+
+  const field = await prisma.detectedField.findFirst({
+    where: whereField,
+    include: {
+      fieldValues: {
+        orderBy: { createdAt: "desc" },
+        take: 1,
+      },
+    },
+  });
+
+  if (!field) {
+    return { status: "UNAVAILABLE", reason: "FIELD_NOT_FOUND" };
+  }
+
+  const latestVal = field.fieldValues[0];
+  if (!latestVal || latestVal.value === undefined || latestVal.value === null || String(latestVal.value).trim() === "") {
+    return { status: "EMPTY", value: "", stringValue: "", field };
+  }
+
+  const stringVal = typeof latestVal.value === "string" ? latestVal.value : JSON.stringify(latestVal.value);
+  return { status: "AVAILABLE", value: latestVal.value, stringValue: stringVal, field };
+}
+

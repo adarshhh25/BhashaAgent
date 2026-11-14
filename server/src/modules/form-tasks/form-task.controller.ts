@@ -59,7 +59,21 @@ export async function fieldUpdate(request: Request, response: Response, next: Ne
     const field = await prisma.detectedField.findFirst({ where: { id: fieldId(request), formTaskId: id } });
     if (!field) throw new HttpError(404, "FIELD_NOT_FOUND", "Field not found");
     const input = parse(fieldUpdateSchema, request.body);
-    const updated = await prisma.detectedField.update({ where: { id: field.id }, data: { ...input, options: input.options as Prisma.InputJsonValue | undefined, fieldMetadata: input.fieldMetadata as Prisma.InputJsonValue | undefined } });
+    const { currentValue, ...fieldScalars } = input as Record<string, unknown>;
+    const updated = await prisma.detectedField.update({
+      where: { id: field.id },
+      data: {
+        ...fieldScalars,
+        options: fieldScalars.options as Prisma.InputJsonValue | undefined,
+        fieldMetadata: fieldScalars.fieldMetadata as Prisma.InputJsonValue | undefined,
+      },
+    });
+    if (currentValue !== undefined && currentValue !== null && String(currentValue).trim() !== "") {
+      await service.setFieldValue(userId(request), id, field.id, {
+        value: currentValue as Prisma.InputJsonValue,
+        source: "USER_PROVIDED",
+      });
+    }
     response.json({ success: true, data: { field: updated } });
   } catch (error) { next(error); }
 }

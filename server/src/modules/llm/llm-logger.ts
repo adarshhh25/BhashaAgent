@@ -19,10 +19,34 @@ export type LLMValidationStatus = "valid" | "repaired" | "invalid" | "not_applic
 
 export type LLMResponseType = "text" | "function_call" | "mixed" | "structured";
 
+export type ObservabilityEventName =
+  | "INTENT_DETECTED"
+  | "FORM_FIELD_MATCHED"
+  | "FORM_VALUE_MATCHED"
+  | "FORM_PROPOSAL_CREATED"
+  | "FORM_PROPOSAL_DELIVERED"
+  | "APPROVAL_RECEIVED"
+  | "AUTOFILL_STARTED"
+  | "AUTOFILL_COMPLETED"
+  | "AUTOFILL_FAILED"
+  | "POST_FILL_VERIFICATION"
+  | "PROVIDER_FALLBACK_STARTED"
+  | "PROVIDER_TOOL_CALL_FAILED"
+  | "FIELD_PERSISTENCE_FAILED"
+  | "TARGET_VALIDATION_PERMITTED"
+  | "TARGET_VALIDATION_REJECTED";
+
 export interface LLMTurnSummary {
   requestId: string;
   conversationId?: string;
   provider: string;
+  requestedProvider?: string;
+  requestedModel?: string;
+  attemptedProvider?: string;
+  attemptedModel?: string;
+  effectiveProvider?: string;
+  configuredModel?: string;
+  selectedModel?: string;
   effectiveModel: string;
   modelsAttempted?: string[];
   modelsUsed?: string[];
@@ -33,12 +57,15 @@ export interface LLMTurnSummary {
   providerSuccess: boolean;
   parseSuccess: boolean;
   structuredResponseValid: boolean;
+  responseValidationSuccess?: boolean;
   validationStatus: LLMValidationStatus;
   toolCallCount: number;
   finalResponseSuccess: boolean;
   totalLatencyMs: number;
+  cancellationStatus?: "not_cancelled" | "cancelled_by_client" | "timeout";
   failureStage?: string;
   failureReason?: string;
+  failureCategory?: string;
 }
 
 const SENSITIVE_KEY_REGEX = /key|token|auth|password|secret|bearer|credential|cookie|session|jwt|authorization|private/i;
@@ -126,6 +153,15 @@ export function logLLMEvent(event: string, fields: Record<string, unknown>): voi
 }
 
 /**
+ * Emits a structured observability log line for form & provider lifecycle events.
+ */
+export function logObservabilityEvent(event: ObservabilityEventName, fields: Record<string, unknown>): void {
+  const clean = sanitizeLogFields(fields);
+  const formatted = formatKeyValues(clean);
+  console.log(`[OBSERVABILITY] ${event}${formatted ? "\n" + formatted : ""}`);
+}
+
+/**
  * Emits the exact single structured summary at the end of every LLM turn.
  */
 export function logLLMTurnSummary(summary: LLMTurnSummary): void {
@@ -133,18 +169,14 @@ export function logLLMTurnSummary(summary: LLMTurnSummary): void {
     requestId: summary.requestId,
     conversationId: summary.conversationId,
     provider: summary.provider,
+    configuredModel: summary.configuredModel,
+    selectedModel: summary.selectedModel,
     effectiveModel: summary.effectiveModel,
-    ...(summary.modelsAttempted && summary.modelsAttempted.length > 0
-      ? { modelsAttempted: Array.from(new Set(summary.modelsAttempted)) }
-      : {}),
-    ...(summary.modelsUsed && summary.modelsUsed.length > 0
-      ? { modelsUsed: Array.from(new Set(summary.modelsUsed)) }
-      : {}),
-    ...(summary.roundModels && summary.roundModels.length > 0
-      ? { roundModels: summary.roundModels }
-      : {}),
+    modelsAttempted: summary.modelsAttempted && summary.modelsAttempted.length > 0 ? Array.from(new Set(summary.modelsAttempted)) : [],
+    modelsUsed: summary.modelsUsed && summary.modelsUsed.length > 0 ? Array.from(new Set(summary.modelsUsed)) : [],
     attemptCount: summary.attemptCount,
     fallbackUsed: summary.fallbackUsed,
+    cancellationStatus: summary.cancellationStatus || "not_cancelled",
     ...(summary.fallbackReasons && summary.fallbackReasons.length > 0
       ? { fallbackReasons: Array.from(new Set(summary.fallbackReasons)) }
       : {}),

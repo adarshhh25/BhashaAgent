@@ -96,7 +96,8 @@ const EQUIVALENCE_GROUPS: Array<{ concept: string; terms: string[] }> = [
 /**
  * Normalizes an option string for matching.
  */
-function cleanString(str: string): string {
+function cleanString(str?: unknown): string {
+  if (typeof str !== "string") return "";
   return str
     .toLowerCase()
     .replace(/[^\p{L}\p{N}]+/gu, " ")
@@ -106,7 +107,8 @@ function cleanString(str: string): string {
 /**
  * Finds the concept name for a given term in the equivalence dictionary.
  */
-function findConcept(term: string): string | undefined {
+function findConcept(term?: unknown): string | undefined {
+  if (typeof term !== "string" || !term.trim()) return undefined;
   const cleaned = cleanString(term);
   if (!cleaned) return undefined;
   for (const group of EQUIVALENCE_GROUPS) {
@@ -119,8 +121,19 @@ function findConcept(term: string): string | undefined {
   return undefined;
 }
 
+interface ValidatedOptionEntry {
+  original: FormOption;
+  value: string;
+  label: string;
+  cleanValue: string;
+  cleanLabel: string;
+}
+
 /**
  * Matches a user-provided value against an array of DOM form options.
+ *
+ * Safely validates option objects, skipping malformed entries without throwing,
+ * and preserves exact matching for valid options.
  *
  * @param userValue What the user said or provided (e.g. "महाराष्ट्र", "Maharashtra", "Thane", "male").
  * @param options The actual DOM options available on the field.
@@ -128,24 +141,105 @@ function findConcept(term: string): string | undefined {
  */
 export function matchOption(
   userValue: unknown,
-  options: FormOption[],
+  options: Array<FormOption | unknown>,
 ): OptionMatchResult {
-  if (!userValue || !options || options.length === 0) {
+  if (userValue === null || userValue === undefined || !options || !Array.isArray(options) || options.length === 0) {
     return { matched: false, confidence: 0 };
   }
 
-  const rawUserStr = String(userValue).trim();
+  const rawUserStr = typeof userValue === "string"
+    ? userValue.trim()
+    : typeof userValue === "number" || typeof userValue === "boolean"
+    ? String(userValue)
+    : "";
+
+  if (!rawUserStr) {
+    return { matched: false, confidence: 0 };
+  }
+
   const cleanedUserStr = cleanString(rawUserStr);
   if (!cleanedUserStr) {
     return { matched: false, confidence: 0 };
   }
 
+  // Defensively validate and normalize option entries (supports objects, strings, numbers, booleans)
+  const validOptions: ValidatedOptionEntry[] = [];
+  let malformedCount = 0;
+
+  for (let i = 0; i < options.length; i++) {
+    const opt: unknown = options[i];
+    if (opt === null || opt === undefined) {
+      malformedCount++;
+      continue;
+    }
+
+    let valueStr = "";
+    let labelStr = "";
+
+    if (typeof opt === "string") {
+      valueStr = opt.trim();
+      labelStr = opt.trim();
+    } else if (typeof opt === "number" || typeof opt === "boolean") {
+      valueStr = String(opt);
+      labelStr = String(opt);
+    } else if (typeof opt === "object") {
+      const anyOpt = opt as Record<string, unknown>;
+      if (typeof anyOpt.value === "string") {
+        valueStr = anyOpt.value.trim();
+      } else if (anyOpt.value !== undefined && anyOpt.value !== null) {
+        valueStr = String(anyOpt.value).trim();
+      }
+
+      if (typeof anyOpt.label === "string") {
+        labelStr = anyOpt.label.trim();
+      } else if (anyOpt.label !== undefined && anyOpt.label !== null) {
+        labelStr = String(anyOpt.label).trim();
+      } else if (valueStr) {
+        labelStr = valueStr;
+      }
+
+      if (!valueStr && labelStr) {
+        valueStr = labelStr;
+      }
+    } else {
+      malformedCount++;
+      continue;
+    }
+
+    if (!valueStr && !labelStr) {
+      malformedCount++;
+      continue;
+    }
+
+    const formOpt: FormOption = typeof opt === "object" && opt !== null && "value" in opt
+      ? (opt as FormOption)
+      : { value: valueStr, label: labelStr };
+
+    validOptions.push({
+      original: formOpt,
+      value: valueStr,
+      label: labelStr,
+      cleanValue: cleanString(valueStr),
+      cleanLabel: cleanString(labelStr),
+    });
+  }
+
+  if (malformedCount > 0) {
+    console.warn(`[OptionMatcher] Skipped ${malformedCount} malformed option(s) with missing string value/label`);
+  }
+
+  if (validOptions.length === 0) {
+    return { matched: false, confidence: 0, reason: "No valid options available" };
+  }
+
+  const userLower = rawUserStr.toLowerCase();
+
   // 1. Direct Exact Match on Option Value
-  for (const opt of options) {
-    if (opt.value.trim().toLowerCase() === rawUserStr.toLowerCase()) {
+  for (const entry of validOptions) {
+    if (entry.value && entry.value.toLowerCase() === userLower) {
       return {
         matched: true,
-        option: opt,
+        option: entry.original,
         confidence: 1.0,
         reason: "Exact match on option value",
       };
@@ -153,11 +247,11 @@ export function matchOption(
   }
 
   // 2. Direct Exact Match on Option Label
-  for (const opt of options) {
-    if (opt.label.trim().toLowerCase() === rawUserStr.toLowerCase()) {
+  for (const entry of validOptions) {
+    if (entry.label && entry.label.toLowerCase() === userLower) {
       return {
         matched: true,
-        option: opt,
+        option: entry.original,
         confidence: 1.0,
         reason: "Exact match on option label",
       };
@@ -165,11 +259,11 @@ export function matchOption(
   }
 
   // 3. Cleaned / Normalized Exact Match
-  for (const opt of options) {
-    if (cleanString(opt.value) === cleanedUserStr || cleanString(opt.label) === cleanedUserStr) {
+  for (const entry of validOptions) {
+    if ((entry.cleanValue && entry.cleanValue === cleanedUserStr) || (entry.cleanLabel && entry.cleanLabel === cleanedUserStr)) {
       return {
         matched: true,
-        option: opt,
+        option: entry.original,
         confidence: 0.98,
         reason: "Normalized match on option label/value",
       };
@@ -179,13 +273,13 @@ export function matchOption(
   // 4. Multilingual Equivalence Dictionary Match
   const userConcept = findConcept(rawUserStr);
   if (userConcept) {
-    for (const opt of options) {
-      const optValConcept = findConcept(opt.value);
-      const optLabelConcept = findConcept(opt.label);
+    for (const entry of validOptions) {
+      const optValConcept = findConcept(entry.value);
+      const optLabelConcept = findConcept(entry.label);
       if (optValConcept === userConcept || optLabelConcept === userConcept) {
         return {
           matched: true,
-          option: opt,
+          option: entry.original,
           confidence: 0.95,
           reason: `Multilingual equivalence match for concept '${userConcept}'`,
         };
@@ -194,18 +288,17 @@ export function matchOption(
   }
 
   // 5. Substring / Word Match
-  for (const opt of options) {
-    const cleanedLabel = cleanString(opt.label);
-    const cleanedVal = cleanString(opt.value);
+  for (const entry of validOptions) {
+    const cleanedLabel = entry.cleanLabel;
+    const cleanedVal = entry.cleanValue;
 
-    // If user's term is contained in the option label or vice versa (e.g. "Maharashtra" in "State of Maharashtra")
     if (
       (cleanedLabel.length > 2 && (cleanedLabel.includes(cleanedUserStr) || cleanedUserStr.includes(cleanedLabel))) ||
       (cleanedVal.length > 2 && (cleanedVal.includes(cleanedUserStr) || cleanedUserStr.includes(cleanedVal)))
     ) {
       return {
         matched: true,
-        option: opt,
+        option: entry.original,
         confidence: 0.85,
         reason: "Substring match on option label/value",
       };

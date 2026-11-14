@@ -61,7 +61,10 @@ export interface BrowserDetectedField {
   options?: Array<{
     value: string | number | boolean;
     label?: string;
+    checked?: boolean;
+    disabled?: boolean;
   }>;
+  currentValue?: string | number | boolean;
   fingerprint?: string;
 }
 
@@ -72,6 +75,9 @@ export interface BrowserFillAction {
   value: string | number | boolean | Array<string | number | boolean>;
   expectedFieldType: string;
   expectedFieldFingerprint?: string;
+  originalInstruction?: string;
+  requestedTarget?: string;
+  generationId?: number;
 }
 
 export interface BrowserFillInstruction {

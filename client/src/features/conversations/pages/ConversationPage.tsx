@@ -93,9 +93,9 @@ export function ConversationPage() {
         navigate(`/conversations/${newConv.id}`);
         await selectConversation(newConv.id);
       }
-      await submitTurn(content, activeFormTaskId);
+      await submitTurn(content, activeFormTaskId || activeFormTask?.id);
     },
-    [activeConversationId, activeFormTaskId, createConversation, navigate, selectConversation, submitTurn],
+    [activeConversationId, activeFormTaskId, activeFormTask, createConversation, navigate, selectConversation, submitTurn],
   );
 
   // Handle opening voice mode from chat composer

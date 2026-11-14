@@ -101,35 +101,74 @@ export function resolveTargetElement(
     doc.querySelectorAll<HTMLElement>('input, select, textarea'),
   );
 
-  for (const el of candidates) {
-    if (el.getAttribute('aria-label') === fieldIdentifier) return el;
-    if (el.getAttribute('name') === fieldIdentifier) return el;
-    if (el.id === fieldIdentifier) return el;
+  const cleanIdent = fieldIdentifier.toLowerCase().replace(/[:\s]+$/, '').trim();
 
-    // Check associated label
+  for (const el of candidates) {
+    const elAria = (typeof el.getAttribute === 'function' ? el.getAttribute('aria-label') : '') || '';
+    if (elAria.toLowerCase().replace(/[:\s]+$/, '').trim() === cleanIdent) return el;
+
+    const elName = (typeof el.getAttribute === 'function' ? el.getAttribute('name') : (el as any).name) || '';
+    if (elName.toLowerCase().replace(/[:\s]+$/, '').trim() === cleanIdent) return el;
+
+    const elId = el.id || '';
+    if (elId.toLowerCase().replace(/[:\s]+$/, '').trim() === cleanIdent) return el;
+
+    // Check associated label for="id"
     if (el.id) {
       try {
         const label = doc.querySelector(`label[for="${safeCss(el.id)}"]`);
-        if (label?.textContent?.trim().toLowerCase() === fieldIdentifier.toLowerCase()) {
+        if (label?.textContent?.trim().toLowerCase().replace(/[:\s]+$/, '').trim() === cleanIdent) {
           return el;
         }
       } catch {
         // Ignore selector error
       }
     }
+
+    // Check wrapping <label>
+    try {
+      if (typeof el.closest === 'function') {
+        const parentLabel = el.closest('label');
+        if (parentLabel?.textContent?.trim().toLowerCase().replace(/[:\s]+$/, '').trim() === cleanIdent) {
+          return el;
+        }
+      }
+    } catch {
+      // Ignore closest errors
+    }
+
+    // Check preceding sibling <label>
+    try {
+      const prevEl = el.previousElementSibling;
+      if (prevEl && (prevEl.tagName?.toLowerCase() === 'label' || (prevEl as HTMLElement).classList?.contains('label'))) {
+        if (prevEl.textContent?.trim().toLowerCase().replace(/[:\s]+$/, '').trim() === cleanIdent) {
+          return el;
+        }
+      }
+    } catch {
+      // Ignore sibling errors
+    }
   }
 
   // Strategy 6: If fieldIdentifier is an option value on a checkbox or radio
-  const lowerIdent = fieldIdentifier.toLowerCase();
+  const lowerIdent = cleanIdent;
   for (const el of candidates) {
     if (isInputElement(el) && (el.type === 'checkbox' || el.type === 'radio')) {
       if (el.value.toLowerCase() === lowerIdent) return el;
-      const pLabel = el.closest('label')?.textContent?.trim().toLowerCase();
+      const pLabel = (typeof el.closest === 'function' ? el.closest('label')?.textContent : null)?.trim().toLowerCase();
       if (pLabel === lowerIdent) return el;
     }
   }
 
-  // Strategy 7: Match by expectedType and position if unique
+  // Strategy 7: Match telephone fields specifically when targeting telephone/phone
+  if (/telephone|phone|mobile|tel|contact/i.test(cleanIdent)) {
+    const telInput = candidates.find(
+      (c) => isInputElement(c) && (c.type?.toLowerCase() === 'tel' || /tel|phone/i.test(c.name || c.id || '')),
+    );
+    if (telInput) return telInput;
+  }
+
+  // Strategy 8: Match by expectedType and position if unique
   if (expectedType) {
     const typeMatches = candidates.filter(
       (c) =>
@@ -213,6 +252,7 @@ function setNativeValue(
   el: HTMLInputElement | HTMLTextAreaElement,
   value: string,
 ): void {
+  const previousValue = el.value;
   try {
     const prototype =
       typeof HTMLTextAreaElement !== 'undefined' && isTextAreaElement(el)
@@ -224,17 +264,129 @@ function setNativeValue(
     const descriptor = prototype ? Object.getOwnPropertyDescriptor(prototype, 'value') : undefined;
     if (descriptor?.set) {
       descriptor.set.call(el, value);
-      return;
+    } else {
+      el.value = value;
     }
   } catch {
-    // Fallback below
+    el.value = value;
   }
-  el.value = value;
+
+  // React controlled component value-tracker synchronization
+  try {
+    const tracker = (el as any)._valueTracker;
+    if (tracker && typeof tracker.setValue === 'function') {
+      tracker.setValue(previousValue === value ? (value === '' ? ' ' : '') : previousValue);
+    }
+  } catch {
+    // Ignore tracker errors
+  }
 }
 
 /**
  * Execute a single Phase 9 BrowserFillAction on the target element.
  */
+const SENSITIVE_DOM_REGEX =
+  /password|passcode|cvv|cvc|credit[\s_-]?card|card[\s_-]?number|debit[\s_-]?card|security[\s_-]?code|(?<![a-zA-Z])token(?![a-zA-Z])|(?<![a-zA-Z])secret(?![a-zA-Z])|private[\s_-]?key|api[\s_-]?key|(?<![a-zA-Z])otp(?![a-zA-Z])|upi[\s_-]?pin|aadhaar|(?<![a-zA-Z])pan(?![a-zA-Z])|(?<![a-zA-Z])ssn(?![a-zA-Z])/i;
+
+function validateDomElementAgainstTarget(
+  element: HTMLElement,
+  requestedTarget?: string,
+  originalInstruction?: string,
+): { valid: boolean; reason?: string; errorCode?: string } {
+  const targetText = (requestedTarget || originalInstruction || '').toLowerCase().trim();
+  if (!targetText) return { valid: true };
+
+  const elName = (typeof element.getAttribute === 'function' ? element.getAttribute('name') : (element as any).name || '') || '';
+  const elId = element.id || '';
+  const elLabel = (typeof element.closest === 'function' ? element.closest('label')?.textContent : '') || '';
+  const elAria = (typeof element.getAttribute === 'function' ? element.getAttribute('aria-label') : '') || '';
+  const searchable = `${elName} ${elId} ${elLabel} ${elAria}`.toLowerCase();
+
+  // 1. Person name vs non-person entities
+  const isPersonRequest = /\b(customer\s*name|my\s*name|applicant\s*name|full\s*name|first\s*name|last\s*name|your\s*name|user\s*name|custname|नाम|नाव)\b/i.test(targetText);
+  const isNonPersonEntity = /\b(university|college|institution|school|company|employer|organization|file|attachment|resume)\b/i.test(searchable);
+  if (isPersonRequest && isNonPersonEntity) {
+    return {
+      valid: false,
+      reason: `Target element '${searchable}' is an organization or file entity, not a personal name`,
+      errorCode: 'TARGET_FIELD_MISMATCH',
+    };
+  }
+
+  // 2. Personal name vs Emergency Contact Name specificity
+  const isExplicitCustomer = /\b(customer\s*name|my\s*name|applicant\s*name|your\s*name|custname)\b/i.test(targetText);
+  const isEmergency = /\b(emergency|secondary|guardian)\b/i.test(searchable);
+  if (isExplicitCustomer && isEmergency) {
+    return {
+      valid: false,
+      reason: `Target element '${searchable}' is emergency contact, but user requested customer name`,
+      errorCode: 'TARGET_FIELD_MISMATCH',
+    };
+  }
+
+  // 3. Phone vs PIN code
+  const isPhoneRequest = /\b(phone|telephone|mobile|tel|cell)\b/i.test(targetText);
+  const isPostalField = /\b(pin\s*code|pincode|postal|zip)\b/i.test(searchable);
+  if (isPhoneRequest && isPostalField) {
+    return {
+      valid: false,
+      reason: `Target element '${searchable}' is postal code, but user requested phone number`,
+      errorCode: 'TARGET_FIELD_MISMATCH',
+    };
+  }
+
+  // 4. Address vs Email
+  const isAddressRequest = /\b(street\s*address|delivery\s*address|residential\s*address|address|पता)\b/i.test(targetText) && !targetText.includes('email');
+  const isEmailField = /\b(email|e-mail)\b/i.test(searchable);
+  if (isAddressRequest && isEmailField) {
+    return {
+      valid: false,
+      reason: `Target element '${searchable}' is email, but user requested physical address`,
+      errorCode: 'TARGET_FIELD_MISMATCH',
+    };
+  }
+
+  // 5. DOB vs Application/Submission Date
+  const isDobRequest = /\b(date\s*of\s*birth|dob|birth\s*date)\b/i.test(targetText);
+  const isEventDateField = /\b(application\s*date|submission\s*date|order\s*date|delivery\s*date)\b/i.test(searchable);
+  if (isDobRequest && isEventDateField) {
+    return {
+      valid: false,
+      reason: `Target element '${searchable}' is event/application date, but user requested date of birth`,
+      errorCode: 'TARGET_FIELD_MISMATCH',
+    };
+  }
+
+  return { valid: true };
+}
+
+export function isElementSensitive(element: HTMLElement): boolean {
+  if (isInputElement(element)) {
+    const inputType = (element.type || '').toLowerCase();
+    if (inputType === 'password') return true;
+    const autocomplete = (element.autocomplete || '').toLowerCase();
+    if (
+      autocomplete.includes('cc-') ||
+      autocomplete.includes('current-password') ||
+      autocomplete.includes('new-password') ||
+      autocomplete.includes('one-time-code')
+    ) {
+      return true;
+    }
+  }
+  const name = (typeof element.getAttribute === 'function' ? element.getAttribute('name') : (element as any).name || '') || '';
+  const id = (element.id || '') || '';
+  const ariaLabel = (typeof element.getAttribute === 'function' ? element.getAttribute('aria-label') : '') || '';
+  const placeholder = (typeof element.getAttribute === 'function' ? element.getAttribute('placeholder') : (element as any).placeholder || '') || '';
+
+  return (
+    SENSITIVE_DOM_REGEX.test(name) ||
+    SENSITIVE_DOM_REGEX.test(id) ||
+    SENSITIVE_DOM_REGEX.test(ariaLabel) ||
+    SENSITIVE_DOM_REGEX.test(placeholder)
+  );
+}
+
 export async function executeSingleAction(
   doc: Document,
   action: BrowserFillAction,
@@ -243,6 +395,19 @@ export async function executeSingleAction(
 
   // Support both action and actionType property names
   const rawAction = (action.action || (action as any).actionType) as BrowserActionType;
+
+  // Immediate cancellation boundary check
+  if ((action as any).cancelled || (action as any).status === 'CANCELLED') {
+    return {
+      fieldId: action.fieldId,
+      actionId: action.actionId,
+      actionType: rawAction,
+      status: 'SKIPPED',
+      errorCode: 'EXECUTION_CANCELLED',
+      message: 'Action was cancelled before DOM mutation',
+      executedAt: timestamp,
+    };
+  }
 
   // Validate action allowlist
   if (!ALLOWED_ACTIONS.includes(rawAction)) {
@@ -277,6 +442,46 @@ export async function executeSingleAction(
     };
   }
 
+  // DOM attachment check
+  if (typeof element.isConnected === 'boolean' && !element.isConnected) {
+    return {
+      fieldId: action.fieldId,
+      actionId: action.actionId,
+      actionType: rawAction,
+      status: 'FAILED',
+      errorCode: 'STALE_FIELD_REFERENCE',
+      message: 'Browser element is detached from the DOM',
+      executedAt: timestamp,
+    };
+  }
+
+  // Boundary validation against user instruction / requested target
+  const targetCheck = validateDomElementAgainstTarget(element, action.requestedTarget, action.originalInstruction);
+  if (!targetCheck.valid) {
+    return {
+      fieldId: action.fieldId,
+      actionId: action.actionId,
+      actionType: rawAction,
+      status: 'FAILED',
+      errorCode: targetCheck.errorCode || 'TARGET_FIELD_MISMATCH',
+      message: targetCheck.reason || 'Target element does not match requested entity',
+      executedAt: timestamp,
+    };
+  }
+
+  // Sensitive field protection boundary check
+  if (isElementSensitive(element)) {
+    return {
+      fieldId: action.fieldId,
+      actionId: action.actionId,
+      actionType: rawAction,
+      status: 'FAILED',
+      errorCode: 'PROTECTED_SENSITIVE_FIELD',
+      message: 'Protected sensitive fields (passwords, cards, CVV, authentication tokens, government IDs) cannot be autofilled by extension',
+      executedAt: timestamp,
+    };
+  }
+
   // Validate element usable state
   const usability = isElementUsable(element);
   if (!usability.usable) {
@@ -287,6 +492,43 @@ export async function executeSingleAction(
       status: 'FAILED',
       errorCode: usability.reason || 'ELEMENT_UNUSABLE',
       message: `Element is disabled or read-only`,
+      executedAt: timestamp,
+    };
+  }
+
+  // File input protection: browsers strictly forbid setting value programmatically on input[type="file"]
+  if (isInputElement(element) && element.type?.toLowerCase() === 'file') {
+    return {
+      fieldId: action.fieldId,
+      actionId: action.actionId,
+      actionType: rawAction,
+      status: 'FAILED',
+      errorCode: 'INCOMPATIBLE_FIELD_TYPE',
+      message: 'File upload inputs cannot accept programmatic text values for browser security reasons. Use native file picker.',
+      executedAt: timestamp,
+    };
+  }
+
+  // Cross-type action compatibility
+  if ((rawAction === 'CHECK' || rawAction === 'UNCHECK') && (!isInputElement(element) || element.type?.toLowerCase() !== 'checkbox')) {
+    return {
+      fieldId: action.fieldId,
+      actionId: action.actionId,
+      actionType: rawAction,
+      status: 'FAILED',
+      errorCode: 'INCOMPATIBLE_FIELD_TYPE',
+      message: `Action '${rawAction}' cannot be executed against non-checkbox element`,
+      executedAt: timestamp,
+    };
+  }
+  if (rawAction === 'SELECT_OPTION' && !isSelectElement(element) && (!isInputElement(element) || element.type?.toLowerCase() !== 'radio')) {
+    return {
+      fieldId: action.fieldId,
+      actionId: action.actionId,
+      actionType: rawAction,
+      status: 'FAILED',
+      errorCode: 'INCOMPATIBLE_FIELD_TYPE',
+      message: `Action 'SELECT_OPTION' cannot be executed against non-select/non-radio element`,
       executedAt: timestamp,
     };
   }
@@ -354,8 +596,36 @@ export async function executeSingleAction(
     // 2. Standard Actions
     switch (rawAction) {
       case 'SET_VALUE': {
-        // If checkbox was targeted with SET_VALUE (e.g. true/false)
+        // If checkbox was targeted with SET_VALUE (e.g. true/false or array of group values)
         if (isInputElement(element) && element.type?.toLowerCase() === 'checkbox') {
+          const targetVal = String(action.value ?? '').trim().toLowerCase();
+          if (element.name && (Array.isArray(action.value) || (targetVal !== 'true' && targetVal !== 'false' && targetVal !== '1' && targetVal !== '0' && targetVal !== 'on' && targetVal !== ''))) {
+            const desiredValues = Array.isArray(action.value)
+              ? (action.value as unknown[]).map((v) => String(v).trim().toLowerCase())
+              : targetVal.split(/[,\s]+/).map((v) => v.trim().toLowerCase());
+
+            const group = Array.from(doc.querySelectorAll<HTMLInputElement>(`input[type="checkbox"][name="${safeCss(element.name)}"]`));
+            let allPassed = true;
+            for (const box of group) {
+              const boxVal = box.value.trim().toLowerCase();
+              const boxLabel = (box.closest('label')?.textContent || '').trim().toLowerCase();
+              const shouldBeChecked = desiredValues.includes('all') || desiredValues.some((dv) => dv === boxVal || dv === boxLabel || boxLabel.includes(dv));
+              if (shouldBeChecked && !box.checked) {
+                if (typeof box.click === 'function') box.click();
+                if (!box.checked) box.checked = true;
+                dispatchInputEvents(box);
+                if (!box.checked) allPassed = false;
+              }
+            }
+            return {
+              fieldId: action.fieldId,
+              actionId: action.actionId,
+              actionType: rawAction,
+              status: allPassed ? 'SUCCESS' : 'FAILED',
+              executedAt: timestamp,
+            };
+          }
+
           const desired = action.value === true || action.value === 'true' || action.value === 1 || String(action.value).toLowerCase() === 'on';
           if (typeof element.focus === "function") element.focus();
           if (element.checked !== desired) {
@@ -390,6 +660,66 @@ export async function executeSingleAction(
           typeof action.value === 'object' && action.value !== null
             ? JSON.stringify(action.value)
             : String(action.value ?? '');
+
+        // Value validity check before DOM mutation
+        const inputType = isInputElement(element) ? (element.type || 'text').toLowerCase() : 'textarea';
+        const targetType = (action.expectedFieldType || inputType).toLowerCase();
+
+        if (targetType === 'email' && stringValue && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(stringValue)) {
+          return {
+            fieldId: action.fieldId,
+            actionId: action.actionId,
+            actionType: rawAction,
+            status: 'FAILED',
+            errorCode: 'INVALID_FIELD_VALUE',
+            message: `Value '${stringValue}' is not a valid email address`,
+            executedAt: timestamp,
+          };
+        }
+        if (targetType === 'number' && stringValue && isNaN(Number(stringValue))) {
+          return {
+            fieldId: action.fieldId,
+            actionId: action.actionId,
+            actionType: rawAction,
+            status: 'FAILED',
+            errorCode: 'INVALID_FIELD_VALUE',
+            message: `Value '${stringValue}' is not a valid number`,
+            executedAt: timestamp,
+          };
+        }
+        if (targetType === 'tel' && stringValue && (/[a-zA-Z]/.test(stringValue) || stringValue.replace(/\D/g, '').length < 3)) {
+          return {
+            fieldId: action.fieldId,
+            actionId: action.actionId,
+            actionType: rawAction,
+            status: 'FAILED',
+            errorCode: 'INVALID_FIELD_VALUE',
+            message: `Value '${stringValue}' is not a valid phone number`,
+            executedAt: timestamp,
+          };
+        }
+        if (targetType === 'date' && stringValue && !/^\d{4}-\d{2}-\d{2}$/.test(stringValue)) {
+          return {
+            fieldId: action.fieldId,
+            actionId: action.actionId,
+            actionType: rawAction,
+            status: 'FAILED',
+            errorCode: 'INVALID_FIELD_VALUE',
+            message: `Value '${stringValue}' is not a valid date (YYYY-MM-DD)`,
+            executedAt: timestamp,
+          };
+        }
+        if (targetType === 'time' && stringValue && !/^\d{1,2}:\d{2}(?::\d{2})?$/.test(stringValue)) {
+          return {
+            fieldId: action.fieldId,
+            actionId: action.actionId,
+            actionType: rawAction,
+            status: 'FAILED',
+            errorCode: 'INVALID_FIELD_VALUE',
+            message: `Value '${stringValue}' is not a valid time (HH:MM)`,
+            executedAt: timestamp,
+          };
+        }
 
         if (typeof element.focus === "function") element.focus();
         setNativeValue(element, stringValue);

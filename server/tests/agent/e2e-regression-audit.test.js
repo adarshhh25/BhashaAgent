@@ -80,7 +80,7 @@ test("E2E Scenario 1: Multilingual text conversation with turn-level language sw
         toolCalls: [],
         responseDraft: "Yes! I can help you fill this form. Which state would you like to select?",
       },
-      assertResponse: (r) => assert.ok(r.includes("state") && !isDevanagari(r)),
+      assertResponse: (r) => assert.ok(r.toLowerCase().includes("state") && !isDevanagari(r)),
     },
     {
       userText: "और राज्य?",

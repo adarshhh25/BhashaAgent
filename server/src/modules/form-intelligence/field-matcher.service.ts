@@ -4,8 +4,9 @@ import type { MappingCandidate, NormalizedField, MappingSource } from "./form-in
 const aliases: Record<string, string[]> = {
   full_name: [
     "full name", "applicant name", "candidate name", "name of candidate", "your name", "first and last name",
-    "पूरा नाम", "नाम", "आवेदक का नाम", "अभ्यर्थी का नाम", "उम्मीदवार का नाम",
-    "पूर्ण नाव", "नाव", "अर्जदाराचे नाव", "उमेदवाराचे नाव",
+    "customer name", "client name", "custname", "customer_name",
+    "पूरा नाम", "नाम", "ग्राहक का नाम", "आवेदक का नाम", "अभ्यर्थी का नाम", "उम्मीदवार का नाम",
+    "पूर्ण नाव", "नाव", "ग्राहकाचे नाव", "अर्जदाराचे नाव", "उमेदवाराचे नाव",
     "poora naam", "pura naam", "purna naav", "apna naam",
   ],
   first_name: [
@@ -78,20 +79,46 @@ const aliases: Record<string, string[]> = {
   ],
 };
 
-function normalize(value: string): string {
+function normalize(value?: string | null): string {
+  if (!value) return "";
   return value.toLowerCase().replace(/[^a-z0-9\u0900-\u097f]+/g, " ").trim();
 }
 
-function conceptFor(value: string): string | undefined {
+function conceptFor(value?: string | null): string | undefined {
+  if (!value) return undefined;
   const normalized = normalize(value);
+  if (!normalized) return undefined;
   if (/(father|mother|guardian|spouse|husband|wife|parent)/.test(normalized)) return undefined;
-  return Object.entries(aliases).find(([, values]) =>
-    values.some((alias) => normalized === normalize(alias) || normalized.includes(normalize(alias))),
-  )?.[0];
+
+  // Non-person entity names (university, company, file, document) must never match person name concepts
+  const isEntityName = /(university|college|institution|company|employer|organization|file|document|attachment|folder)/.test(normalized);
+
+  // Exact alias match first
+  for (const [concept, values] of Object.entries(aliases)) {
+    if (isEntityName && (concept === "full_name" || concept === "first_name" || concept === "last_name")) {
+      continue;
+    }
+    if (values.some((alias) => normalized === normalize(alias))) {
+      return concept;
+    }
+  }
+
+  // Substring alias match
+  for (const [concept, values] of Object.entries(aliases)) {
+    if (isEntityName && (concept === "full_name" || concept === "first_name" || concept === "last_name")) {
+      continue;
+    }
+    if (values.some((alias) => normalized.includes(normalize(alias)))) {
+      return concept;
+    }
+  }
+
+  return undefined;
 }
 
 function fieldConcept(field: NormalizedField): string | undefined {
-  return conceptFor(field.searchableText) ?? conceptFor(field.label);
+  if ((field.inputType || "").toLowerCase() === "file") return undefined;
+  return (field.searchableText ? conceptFor(field.searchableText) : undefined) ?? (field.label ? conceptFor(field.label) : undefined);
 }
 
 function sourceConcept(fact: ContextProfileFact): string | undefined {

@@ -1,9 +1,7 @@
-import { useState } from 'react';
 import { Play, ShieldCheck, AlertCircle, Loader2 } from 'lucide-react';
 import { useBrowserConnection } from '../hooks/useBrowserConnection';
 import { useBrowserExecution } from '../hooks/useBrowserExecution';
 import { BrowserConnectionBanner } from './BrowserConnectionBanner';
-import { FillConfirmationModal } from './FillConfirmationModal';
 import { ExecutionProgressCard } from './ExecutionProgressCard';
 import { ActionResultList } from './ActionResultList';
 import { ExecutionSummaryView } from './ExecutionSummaryView';
@@ -15,8 +13,6 @@ interface BrowserExecutionPanelProps {
 }
 
 export function BrowserExecutionPanel({ task, fields = [] }: BrowserExecutionPanelProps) {
-  const [isConfirmOpen, setIsConfirmOpen] = useState(false);
-
   const {
     status: connectionStatus,
     activeUrl,
@@ -41,14 +37,11 @@ export function BrowserExecutionPanel({ task, fields = [] }: BrowserExecutionPan
     resetExecution,
   } = useBrowserExecution(task);
 
-  const isApproved = task.status === 'APPROVED_FOR_FILLING';
-  const approvedFieldsCount = fields.filter(
-    (f) => f.fieldValues?.[0]?.status === 'APPROVED',
+  const executableFieldsCount = fields.filter(
+    (f) => Boolean(f.fieldValues?.[0]?.value) && !f.isDisabled && !f.isReadOnly,
   ).length;
 
   const handleStartFilling = async () => {
-    setIsConfirmOpen(false);
-
     // Ensure session is registered
     let session = pageSession;
     if (!session) {
@@ -99,27 +92,23 @@ export function BrowserExecutionPanel({ task, fields = [] }: BrowserExecutionPan
         <div className="p-4 bg-card border border-divider rounded-xl shadow-xs flex flex-col gap-3">
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-2.5">
-              <div
-                className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${
-                  isApproved ? 'bg-accent/15 text-accent' : 'bg-divider/50 text-text-secondary'
-                }`}
-              >
+              <div className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0 bg-accent/15 text-accent">
                 <ShieldCheck className="w-4 h-4" />
               </div>
               <div>
                 <h4 className="text-xs font-semibold text-text-primary">
-                  {isApproved ? 'Ready for Browser Execution' : 'Approval Required'}
+                  Ready for Direct Autofill
                 </h4>
                 <p className="text-[11px] text-text-secondary mt-0.5">
-                  {approvedFieldsCount} approved field{approvedFieldsCount === 1 ? '' : 's'} available to fill
+                  {executableFieldsCount} field{executableFieldsCount === 1 ? '' : 's'} ready to populate
                 </p>
               </div>
             </div>
 
             <button
               type="button"
-              disabled={!isApproved || isRegisteringSession || approvedFieldsCount === 0}
-              onClick={() => setIsConfirmOpen(true)}
+              disabled={isRegisteringSession || executableFieldsCount === 0}
+              onClick={() => void handleStartFilling()}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-accent text-white text-xs font-semibold hover:bg-accent/90 transition-all shadow-xs disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
             >
               {isRegisteringSession ? (
@@ -132,7 +121,7 @@ export function BrowserExecutionPanel({ task, fields = [] }: BrowserExecutionPan
           </div>
 
           <p className="text-[10px] text-text-placeholder leading-normal pt-2 border-t border-divider/60">
-            Explicit Consent: Clicking &quot;Fill Webpage Form&quot; opens an authorization review. Execution will populate form inputs in your active tab. The form will NEVER be automatically submitted.
+            Direct Execution: Form fields are populated directly into your active browser tab. Forms are NEVER automatically submitted.
           </p>
         </div>
       )}
@@ -163,16 +152,6 @@ export function BrowserExecutionPanel({ task, fields = [] }: BrowserExecutionPan
       {results.length > 0 && (
         <ActionResultList results={results} fields={fields} />
       )}
-
-      {/* Confirmation Modal */}
-      <FillConfirmationModal
-        task={task}
-        fields={fields}
-        isOpen={isConfirmOpen}
-        isExecuting={isExecuting}
-        onConfirm={() => void handleStartFilling()}
-        onClose={() => setIsConfirmOpen(false)}
-      />
     </div>
   );
 }

@@ -1,822 +1,527 @@
-# BhashaAgent Backend — Complete Technical Architecture & Developer Guide
+# BhashaAgent Server — Technical Architecture & Developer Guide
 
-Welcome to the **BhashaAgent Backend** codebase. This document serves as the comprehensive, ground-truth technical guide for developers working on the server application.
+Welcome to the **BhashaAgent Server** technical documentation. This guide details the backend orchestration architecture, Express 5 API design, PostgreSQL database schema with Prisma ORM, multi-turn AI agent orchestration, and real-time voice streaming gateway.
 
-BhashaAgent is a multilingual, AI-powered browser assistant designed to help Indian language speakers navigate and complete web tasks. The backend provides secure user authentication, conversation lifecycle tracking with turn-by-turn revisions, persistent profile memory with explicit user verification, dynamic form intelligence and field mapping, multi-turn AI agent orchestration with anti-fabrication grounding, and a real-time full-duplex voice streaming gateway.
+The server operates as a secure, authenticated bridge between the user's browser extension, PostgreSQL database, Google Gemini / Groq AI models, and Gnani speech synthesis/recognition services.
 
 ---
 
 ## Table of Contents
 
-1. [System Overview & Architectural Boundaries](#1-system-overview--architectural-boundaries)
-2. [Technology Stack & Rationale](#2-technology-stack--rationale)
-3. [Complete Server Folder Structure](#3-complete-server-folder-structure)
-4. [Backend Architecture & Request Lifecycle](#4-backend-architecture--request-lifecycle)
-5. [Authentication & Authorization](#5-authentication--authorization)
-6. [Conversation Management & Revision Tracking](#6-conversation-management--revision-tracking)
-7. [Profile Memory Manager](#7-profile-memory-manager)
-8. [Form Task Manager & Lifecycle](#8-form-task-manager--lifecycle)
-9. [Context Builder](#9-context-builder)
-10. [Agent Orchestrator & Multi-Turn Loop](#10-agent-orchestrator--multi-turn-loop)
-11. [LLM Provider Abstraction Layer](#11-llm-provider-abstraction-layer)
-12. [Browser Integration & Execution Protocol (bhasha.browser.v1)](#12-browser-integration--execution-protocol-bhashabrowserv1)
-13. [Voice Gateway & WebSocket Streaming (bhasha.voice.v1)](#13-voice-gateway--websocket-streaming-bhashavoicev1)
-14. [Database Architecture & Prisma Schema](#14-database-architecture--prisma-schema)
-15. [Complete API Reference](#15-complete-api-reference)
-16. [Environment Configuration Reference](#16-environment-configuration-reference)
-17. [Security, Error Handling & Reliability](#17-security-error-handling--reliability)
-18. [Automated Testing Suite (148 Passing Tests)](#18-automated-testing-suite-148-passing-tests)
-19. [Installation, Local Development & Deployment](#19-installation-local-development--deployment)
-20. [Troubleshooting Guide](#20-troubleshooting-guide)
-21. [Developer Contribution Guidelines](#21-developer-contribution-guidelines)
+- [1. System Overview & Architectural Boundaries](#1-system-overview--architectural-boundaries)
+- [2. Technology Stack & Dependencies](#2-technology-stack--dependencies)
+- [3. Server Folder Structure](#3-server-folder-structure)
+- [4. Backend Architecture Diagram](#4-backend-architecture-diagram)
+- [5. Authentication, Authorization & Token Lifecycle](#5-authentication-authorization--token-lifecycle)
+- [6. Complete REST API Reference](#6-complete-rest-api-reference)
+  - [6.1 Authentication (`/api/v1/auth`)](#61-authentication-apiv1auth)
+  - [6.2 User Profile (`/api/v1/users`)](#62-user-profile-apiv1users)
+  - [6.3 Conversations (`/api/v1/conversations`)](#63-conversations-apiv1conversations)
+  - [6.4 Agent Turns (`/api/v1/conversations/:id/turns`)](#64-agent-turns-apiv1conversationsidturns)
+  - [6.5 Form Tasks (`/api/v1/form-tasks`)](#65-form-tasks-apiv1form-tasks)
+  - [6.6 Browser Registration & Execution (`/api/v1/browser`)](#66-browser-registration--execution-apiv1browser)
+  - [6.7 Profile Memory (`/api/v1/memories`)](#67-profile-memory-apiv1memories)
+  - [6.8 Context Retrieval (`/api/v1/context`)](#68-context-retrieval-apiv1context)
+  - [6.9 Voice Session Initialization (`/api/v1/voice`)](#69-voice-session-initialization-apiv1voice)
+- [7. Agent Orchestrator & Multi-Turn Loop](#7-agent-orchestrator--multi-turn-loop)
+  - [7.1 Context Builder & Token Budgeting](#71-context-builder--token-budgeting)
+  - [7.2 Agent Tool Registry (7 Tools)](#72-agent-tool-registry-7-tools)
+  - [7.3 Anti-Hallucination Claim Sanitization](#73-anti-hallucination-claim-sanitization)
+- [8. Deterministic Form Action Router & Intent Classifier](#8-deterministic-form-action-router--intent-classifier)
+  - [8.1 Centralized Intent Classification](#81-centralized-intent-classification)
+  - [8.2 Instruction-to-Target Field Validation](#82-instruction-to-target-field-validation)
+  - [8.3 Script Conversion & Transliteration](#83-script-conversion--transliteration)
+  - [8.4 Multi-Checkbox Group Handling](#84-multi-checkbox-group-handling)
+- [9. LLM Provider Layer & Fallback Engine](#9-llm-provider-layer--fallback-engine)
+  - [9.1 Gemini 2.5 Flash Integration](#91-gemini-25-flash-integration)
+  - [9.2 Dynamic Quota Detection & Model Degradation](#92-dynamic-quota-detection--model-degradation)
+  - [9.3 Groq HTTP Provider Secondary Fallback](#93-groq-http-provider-secondary-fallback)
+- [10. Voice Gateway & WebSocket Architecture](#10-voice-gateway--websocket-architecture)
+- [11. Database Schema & Prisma Architecture](#11-database-schema--prisma-architecture)
+  - [11.1 Entity-Relationship Diagram](#111-entity-relationship-diagram)
+  - [11.2 Core Data Models](#112-core-data-models)
+  - [11.3 Migrations & Database Setup](#113-migrations--database-setup)
+- [12. Environment Configuration Reference](#12-environment-configuration-reference)
+- [13. Error Handling, Observability & Audit Logging](#13-error-handling-observability--audit-logging)
+- [14. Automated Testing Suite](#14-automated-testing-suite)
+- [15. Server Troubleshooting Guide](#15-server-troubleshooting-guide)
 
 ---
 
 ## 1. System Overview & Architectural Boundaries
 
-The BhashaAgent backend is an **Express 5 + TypeScript** service backed by a **PostgreSQL** database managed via **Prisma ORM**. It sits between the user's client extension and external AI/Speech inference engines:
+The BhashaAgent backend is an **Express 5** application written in **TypeScript**, backed by a **PostgreSQL** database managed through **Prisma ORM**.
 
 ```mermaid
 flowchart LR
-    Client["Chrome Extension<br/>(Side Panel / Popup / Content Script)"]
+    Client["Chrome Extension<br/>(Side Panel / Content Script)"]
     Server["BhashaAgent Server<br/>(Express 5 + WebSocket Gateway)"]
     DB[(PostgreSQL Database<br/>Prisma ORM)]
-    LLM["LLM Providers<br/>(Gemini 2.5 Flash / Groq)"]
-    Speech["Speech Engines<br/>(Gnani Vachana STT / Timbre TTS)"]
+    Gemini["Google Gemini<br/>(gemini-2.5-flash / lite)"]
+    Groq["Groq Cloud API<br/>(gpt-oss-20b)"]
+    Gnani["Gnani Speech Services<br/>(Vachana STT / Timbre TTS)"]
 
     Client <--> |REST HTTP (/api/v1/*)| Server
     Client <--> |WebSocket (/api/v1/voice/ws)| Server
     Server <--> |TCP (Prisma Client)| DB
-    Server <--> |REST / SDK| LLM
-    Server <--> |Secure WebSockets| Speech
+    Server <--> |HTTPS SDK (@google/genai)| Gemini
+    Server <--> |HTTPS REST| Groq
+    Server <--> |Secure WebSockets| Gnani
 ```
 
-### Architectural Separation: Backend vs. Frontend Boundaries
+### Architectural Separation of Responsibilities
 
-| Responsibility | Handled By Backend | Handled By Frontend (Client) |
+| Responsibility | Handled By Server | Handled By Client (Extension) |
 | :--- | :---: | :---: |
-| **DOM Inspection & Element Extraction** | ❌ No direct DOM access | ✅ Content script traverses webpage DOM |
-| **DOM Value Insertion (`SET_VALUE`, etc.)** | ❌ Produces approved instructions only | ✅ Content script executes DOM events |
-| **Form Submission Automation** | ❌ **Strictly prohibited** | ❌ User performs manual final submit |
-| **Anti-Fabrication Verification** | ✅ Enforces grounding in user speech | ❌ Validates UI input fields |
-| **Audio Frame Encoding & Capture** | ❌ Decodes incoming PCM streams | ✅ AudioWorklet captures 16 kHz PCM |
-| **Speech-to-Text & Text-to-Speech Streaming** | ✅ Proxies Gnani Vachana & Timbre | ❌ Decodes & plays 24 kHz audio chunks |
-| **Tenant Isolation & Access Control** | ✅ Enforces PostgreSQL ownership barriers | ❌ Manages token storage in Chrome |
+| **DOM Inspection & Element Detection** | ❌ Never inspects DOM directly | ✅ Content script traverses webpage DOM |
+| **User Authentication & Session Tokens** | ✅ Issues Argon2id + JWT tokens | ✅ Stores tokens via Chrome storage mutex |
+| **Form Task & Field State Persistence** | ✅ Persists fields and values in DB | ✅ Submits scanned DOM snapshots |
+| **Intent Classification & Form Routing** | ✅ Deterministic router & validator | ❌ Dispatches user instructions |
+| **AI Model Invocations & Fallback** | ✅ Gemini SDK, Groq HTTP client | ❌ Never interacts with LLMs directly |
+| **DOM Mutation (`SET_VALUE`, etc.)** | ❌ Emits validated instructions | ✅ Simulates native DOM input events |
+| **Form Submission Automation** | ❌ **Strictly prohibited** | ❌ **Strictly prohibited** |
 
 ---
 
-## 2. Technology Stack & Rationale
+## 2. Technology Stack & Dependencies
 
-| Technology | Verified Version | Purpose & Architectural Rationale |
+Dependencies from [server/package.json](server/package.json):
+
+| Dependency | Version | Purpose |
 | :--- | :---: | :--- |
-| **Node.js** | `>= 20.x` | Modern server runtime supporting native WebSockets, crypto, and ES2022 features. |
-| **TypeScript** | `5.7.3` | Static type safety and strict compiler checks (`strict: true`). |
-| **Express** | `5.1.0` | Core HTTP framework with improved error routing and asynchronous middleware handling. |
-| **Prisma ORM** | `6.19.0` | Type-safe query builder and database migration engine connecting to PostgreSQL. |
-| **PostgreSQL** | `>= 15.x` | Relational data store enforcing foreign key constraints, composite keys, and row-level ACID transactions. |
-| **Argon2** | `0.41.1` | Cryptographic password hashing using the Argon2id algorithm (RFC 9106) with memory hardness (19 MiB). |
-| **JSONWebToken** | `9.0.2` | Cryptographic signing and verification of short-lived (15m) access tokens. |
-| **Google Gen AI SDK** | `2.32.0` | Official `@google/genai` client for primary Gemini models with fallback model execution. |
-| **ws** | `8.22.1` | High-throughput WebSocket server managing streaming voice gateway sessions (`bhasha.voice.v1`). |
-| **Zod** | `4.1.12` | Runtime schema validation for API payloads, tool arguments, and structured LLM outputs. |
-| **express-rate-limit** | `8.2.1` | Brute-force and denial-of-service defense on authentication and AI turn routes. |
-| **Dotenv** | `16.4.7` | Environment variable loader supporting multi-path resolution (`.env`, `server/.env`). |
+| **express** | `^5.1.0` | Core HTTP framework with native Promise error handling. |
+| **@prisma/client** | `^6.19.0` | Strongly typed PostgreSQL ORM and query builder. |
+| **@google/genai** | `^2.32.0` | Official Google Gemini SDK for Gemini 2.5 Flash and Flash Lite. |
+| **argon2** | `^0.41.1` | Password hashing using Argon2id with cryptographically random salts. |
+| **jsonwebtoken** | `^9.0.2` | Signed JWT access tokens with audience, issuer, and expiration claims. |
+| **ws** | `^8.22.1` | Full-duplex WebSocket server powering the real-time voice gateway. |
+| **zod** | `^4.1.12` | Schema validation for API payloads, tool calls, and model outputs. |
+| **express-rate-limit** | `^8.2.1` | IP-based request throttling protecting authentication and agent turn routes. |
+| **dotenv** | `^16.4.7` | Environment variable loader. |
+| **prisma** (dev) | `^6.19.0` | Database schema migrations and client generator CLI. |
+| **typescript** (dev)| `^5.7.3` | TypeScript compiler targeting ES2022 with CommonJS module emission. |
 
 ---
 
-## 3. Complete Server Folder Structure
+## 3. Server Folder Structure
 
 ```text
 server/
-├── .env.example                                      # Environment variable template
-├── .gitignore                                        # Excludes node_modules, dist, .env, logs
-├── CLEANUP_AUDIT_REPORT.md                           # Formal codebase audit report
-├── package.json                                      # Scripts, dependencies, and metadata
-├── package-lock.json                                 # Deterministic package dependency tree
-├── README.md                                         # This documentation file
-├── tsconfig.json                                     # TypeScript compiler configuration
-│
 ├── prisma/
-│   ├── schema.prisma                                 # Prisma 6 schema (18 models, 15 enums)
-│   └── migrations/                                   # 11 historical linear SQL migrations
-│       ├── 20261031000000_initial_schema/
-│       ├── 20261031001000_ownership_integrity/
-│       ├── 20261031002000_composite_ownership_keys/
-│       ├── 20261031003000_message_revisions/
-│       ├── 20261031210000_profile_memory_fields/
-│       ├── 20261031213000_form_task_manager/
-│       ├── 20261102003000_browser_protocol/
-│       ├── 20261102003500_browser_registration_idempotency/
-│       ├── 20261102004500_browser_retry_idempotency_hash/
-│       ├── 20261102005000_browser_retry_scope/
-│       └── 20261102005500_browser_registration_request_identity/
-│
-├── src/                                              # TypeScript Source Code (75 active modules)
-│   ├── server.ts                                     # Express server & WebSocket gateway initialization
-│   │
-│   ├── common/                                       # Cross-cutting concerns
-│   │   ├── errors.ts                                 # HttpError class & isHttpError guard
-│   │   ├── middleware/
-│   │   │   └── authenticate.ts                       # Bearer JWT verification middleware
-│   │   └── types/
-│   │       └── express.d.ts                          # Ambient typing for Express.Request.user
-│   │
-│   ├── config/                                       # Core configurations
-│   │   ├── database.ts                               # PrismaClient singleton & disconnect handler
-│   │   └── environment.ts                            # Validated typed environment configuration
-│   │
-│   └── modules/                                      # Domain subsystems
-│       ├── agent/                                    # Orchestrator & Multilingual AI Agent
-│       │   ├── agent.controller.ts                   # POST /api/v1/agent/turn HTTP endpoint
-│       │   ├── agent.orchestrator.ts                 # Multi-round tool execution and repair loop
-│       │   ├── agent.prompt.ts                       # System prompt, grounding rules, language policy
-│       │   ├── agent.routes.ts                       # Agent router with rate limiting
-│       │   ├── agent.service.ts                      # processAgentTurn & processVoiceTranscript
-│       │   ├── agent.tools.ts                        # Tool definitions & grounding verifiers
-│       │   ├── agent.types.ts                        # Orchestrator decision interfaces
-│       │   ├── agent.validator.ts                    # Zod schemas for structured LLM decisions
-│       │   └── language-detector.ts                  # Unicode script & Indic language detection
-│       │
-│       ├── auth/                                     # Authentication & Token Management
-│       │   ├── auth.controller.ts                    # Register, login, refresh, logout, me handlers
-│       │   ├── auth.routes.ts                        # Express routes for /auth & /users
-│       │   ├── auth.service.ts                       # User registration, token rotation, revocation
-│       │   ├── auth.types.ts                         # Auth request/response interfaces
-│       │   ├── auth.validator.ts                     # Zod input validation schemas
-│       │   ├── password.service.ts                   # Argon2id password hashing & verification
-│       │   └── token.service.ts                      # JWT signing/verification & SHA-256 token hashing
-│       │
-│       ├── browser/                                  # Browser Automation Protocol (bhasha.browser.v1)
-│       │   ├── browser.controller.ts                 # Session register, instructions, ack handlers
-│       │   ├── browser.protocol.ts                   # Zod protocol contracts and schemas
-│       │   ├── browser.routes.ts                     # Express routes for /api/v1/browser
-│       │   ├── browser.service.ts                    # Idempotency hash checks, instruction generation
-│       │   └── browser.types.ts                      # Execution and session interfaces
-│       │
-│       ├── context/                                  # Unified Agent Context Builder
-│       │   ├── context.controller.ts                 # POST /api/v1/context/build HTTP endpoint
-│       │   ├── context.routes.ts                     # Express router for /api/v1/context
-│       │   ├── context.service.ts                    # Context assembly (messages, memory, forms)
-│       │   ├── context.types.ts                      # AgentContext schema & diagnostic models
-│       │   └── context.validator.ts                  # Zod validation for context build requests
-│       │
-│       ├── conversations/                            # Conversation & Message Management
-│       │   ├── context.service.ts                    # Message cursor pagination queries
-│       │   ├── conversation.controller.ts            # CRUD handlers for conversations & messages
-│       │   ├── conversation.routes.ts                # Express routes for /api/v1/conversations
-│       │   ├── conversation.service.ts               # Conversation lifecycle (active, archived, deleted)
-│       │   ├── conversation.validator.ts             # Zod validation for conversations
-│       │   └── message.service.ts                    # Message storage & revision history
-│       │
-│       ├── form-intelligence/                        # Form Intelligence & Field Matching
-│       │   ├── field-matcher.service.ts              # Fuzzy heuristic matching against profile facts
-│       │   ├── field-normalizer.service.ts           # Label normalization & punctuation stripping
-│       │   ├── field-type-validator.service.ts       # HTML input type validation (email, tel, etc.)
-│       │   ├── form-intelligence.controller.ts       # Match controller
-│       │   ├── form-intelligence.routes.ts           # Router for /api/v1/form-intelligence
-│       │   ├── form-intelligence.schemas.ts          # Zod schema for field match requests
-│       │   ├── form-intelligence.service.ts          # Match coordination service
-│       │   ├── form-intelligence.types.ts            # Mapping suggestion contracts
-│       │   ├── option-matcher.service.ts             # Multilingual dropdown option matcher
-│       │   └── review-summary.service.ts             # Form review summary builder
-│       │
-│       ├── form-tasks/                               # Form Task State Machine & Approvals
-│       │   ├── form-task.controller.ts               # Task CRUD & field value approval handlers
-│       │   ├── form-task.routes.ts                   # Express routes for /api/v1/form-tasks
-│       │   ├── form-task.service.ts                  # FormTask state machine & snapshot generation
-│       │   └── form-task.validator.ts                # Zod schemas for task lifecycle transitions
-│       │
-│       ├── llm/                                      # LLM Provider Abstraction Layer
-│       │   ├── gemini.provider.ts                    # Google Gen AI SDK client with fallback model
-│       │   ├── llm-logger.ts                         # Structured turn logger & sensitive data masking
-│       │   ├── llm.errors.ts                         # Typed LLMError hierarchy
-│       │   ├── llm.factory.ts                        # Singleton factory (Gemini vs HTTP provider)
-│       │   ├── llm.provider.ts                       # Generic OpenAI/Groq compatible HTTP client
-│       │   └── llm.types.ts                          # Provider interfaces & message models
-│       │
-│       ├── memories/                                 # Persistent Profile Memory
-│       │   ├── memory-extraction.service.ts          # Candidate fact extraction from conversations
-│       │   ├── memory.controller.ts                  # Handlers for approved facts & proposals
-│       │   ├── memory.routes.ts                      # Express routes for /api/v1/memories
-│       │   ├── memory.service.ts                     # Memory CRUD & explicit approval transitions
-│       │   ├── memory.types.ts                       # ProfileMemory and proposal interfaces
-│       │   └── memory.validator.ts                   # Zod schemas for memory inputs
-│       │
-│       ├── users/                                    # User Queries
-│       │   └── users.service.ts                      # User profile fetching & sanitization
-│       │
-│       └── voice/                                    # Real-Time Voice Gateway & Streaming
-│           ├── gnani.adapter.ts                      # Gnani Vachana STT WebSocket client
-│           ├── timbre.adapter.ts                     # Gnani Timbre TTS WebSocket client
-│           ├── timbre.protocol.ts                    # Protocol schemas for Timbre TTS
-│           ├── voice-language.ts                     # Turn-level language resolver for voice
-│           ├── voice.controller.ts                   # Voice ticket generation endpoint
-│           ├── voice.gateway.ts                      # WebSocket gateway (/api/v1/voice/ws)
-│           ├── voice.protocol.ts                     # Voice protocol schemas & event builders
-│           ├── voice.registry.ts                     # Concurrency, session registry & state machine
-│           ├── voice.routes.ts                       # Router for /api/v1/voice
-│           └── voice.tickets.ts                      # In-memory single-use ticket generator
-│
-└── tests/                                            # Test Suites (27 files, 148 passing tests)
-    ├── run-tests.js                                  # Test runner bootstrapping dotenv & Node test runner
-    ├── support/
-    │   └── environment.js                            # Test environment setup, mocks, and DB isolation
-    ├── agent/                                        # Orchestrator & anti-fabrication test suites
-    ├── auth/                                         # Authentication, token rotation, Argon2 tests
-    ├── browser/                                      # Browser automation protocol & idempotency tests
-    ├── context/                                      # Context builder & task resolution tests
-    ├── conversations/                                # Conversation CRUD & pagination tests
-    ├── database/                                     # Database foreign key & transaction tests
-    ├── evaluation/                                   # LLM token benchmarking & evaluation scripts
-    ├── form-intelligence/                            # Field matching & multilingual option tests
-    ├── form-tasks/                                   # Form task approval & state machine tests
-    ├── llm/                                          # LLM provider & fallback tests
-    ├── memories/                                     # Profile memory CRUD & approval tests
-    └── voice/                                        # Voice WebSocket gateway & STT/TTS tests
+│   ├── schema.prisma               # Complete database schema, relations, constraints & indexes
+│   └── migrations/                 # Versioned SQL migration history
+├── src/
+│   ├── common/                     # HttpError class, shared types, utility helpers
+│   ├── config/                     # environment.ts (Zod schema config), database.ts (Prisma client)
+│   ├── modules/
+│   │   ├── agent/                  # Agent orchestrator, prompt generator, tool registry, language detector
+│   │   ├── auth/                   # Password hashing, JWT signing, refresh token rotation, auth middleware
+│   │   ├── browser/                # Browser registration, execution tracking, protocol schemas
+│   │   ├── context/                # Multi-source context builder & dynamic token budgeter
+│   │   ├── conversations/          # Conversation lifecycle, message storage, revision tracking
+│   │   ├── form-intelligence/      # Intent classifier, form action router, target validator, script converter
+│   │   ├── form-tasks/             # FormTask lifecycle, detected field persistence, field value proposals
+│   │   ├── llm/                    # Gemini provider, Groq HTTP provider, provider factory, logger
+│   │   ├── memories/               # Profile memory CRUD, proposal lifecycle, fact categories
+│   │   ├── users/                  # User profile retrieval and updates
+│   │   └── voice/                  # WebSocket gateway, Gnani STT/TTS bridges, audio frame assembler
+│   └── server.ts                   # Express app setup, CORS, HTTP & WebSocket server initialization
+├── tests/                          # 292 automated tests across 9 comprehensive suites
+├── package.json
+└── tsconfig.json
 ```
 
 ---
 
-## 4. Backend Architecture & Request Lifecycle
-
-### Typical HTTP Request Lifecycle
-
-```mermaid
-sequenceDiagram
-    autonumber
-    participant C as Chrome Extension
-    participant S as Express Server (server.ts)
-    participant M as authenticate Middleware
-    participant Ctrl as Domain Controller
-    participant Svc as Domain Service
-    participant DB as PostgreSQL (Prisma)
-
-    C->>S: HTTP Request (Headers + Bearer JWT)
-    S->>S: Apply CORS & Body Parser (limit: 32kb)
-    S->>M: authenticate(req, res, next)
-    M->>M: Verify JWT Signature & Expiry
-    alt Invalid or Expired Token
-        M-->>C: 401 Unauthorized (TOKEN_EXPIRED / INVALID_TOKEN)
-    else Valid Token
-        M->>Ctrl: Attach req.user & Dispatch Route Handler
-        Ctrl->>Ctrl: Validate Request Body with Zod Schema
-        alt Validation Error
-            Ctrl-->>C: 400 Bad Request (VALIDATION_ERROR)
-        else Valid Payload
-            Ctrl->>Svc: Call Domain Logic (userId, payload)
-            Svc->>DB: Parameterized Prisma Query (Tenant Isolated)
-            DB-->>Svc: Query Results
-            Svc-->>Ctrl: Service Output
-            Ctrl-->>C: 200 OK { success: true, data: {...} }
-        end
-    end
-```
-
-### Application Initialization Sequence ([`server.ts`](file:///c:/Users/Dell/Desktop/AI/server/src/server.ts))
-1. **Environment Validation**: Loads `.env`, validates `DATABASE_URL`, verifies `JWT_ACCESS_SECRET` length (>= 32 chars).
-2. **CORS Pipeline**: Permits Chrome Extension origins (`chrome-extension://*`) and local development origins, exposing required headers.
-3. **Body Limits**: Enforces a strict `32kb` payload limit on JSON bodies to prevent payload exhaustion attacks.
-4. **Router Mounting**: Registers modular domain routers under `/api/v1/*`.
-5. **Centralized Error Handler**: Catches typed `HttpError` instances and emits structured `{ success: false, error: { code, message } }` JSON responses.
-6. **Dual-Transport Binding**: Binds Express to a Node `http.Server` and attaches the `VoiceGateway` WebSocket server at `/api/v1/voice/ws`.
-7. **Graceful Shutdown**: Traps `SIGINT` and `SIGTERM` to close database pools and WebSocket connections cleanly before exiting.
-
----
-
-## 5. Authentication & Authorization
-
-Implemented in [`server/src/modules/auth/`](file:///c:/Users/Dell/Desktop/AI/server/src/modules/auth/).
-
-### Security Specifications
-- **Password Hashing**: Argon2id (`argon2.argon2id`, `memoryCost: 19456` [19 MiB], `timeCost: 2`, `parallelism: 1`).
-- **Password Constraints**: Enforced between 12 and 128 characters (`password.service.ts`).
-- **Access Tokens**: Short-lived (15 minutes), signed with HMAC-SHA256 containing `userId`, `email`, `role`, and audience `bhashaagent-api`.
-- **Refresh Tokens**: Long-lived (7 days), generated via `crypto.randomBytes(40).toString('hex')`.
-- **Refresh Token Storage**: **Never stored as plain text**. The server computes `sha256(rawRefreshToken)` and stores only the hash in `refresh_tokens.token_hash`.
-- **Single-Flight Rotation**: Consuming a refresh token revokes the token record and issues a fresh pair in an atomic transaction.
-
-```mermaid
-sequenceDiagram
-    autonumber
-    participant C as Client
-    participant Auth as AuthService
-    participant Token as TokenService
-    participant DB as PostgreSQL (Prisma)
-
-    C->>Auth: POST /api/v1/auth/refresh { refreshToken }
-    Auth->>Token: hashRefreshToken(refreshToken) -> SHA-256
-    Auth->>DB: findUnique({ where: { tokenHash } })
-    alt Token not found or revoked
-        Auth-->>C: 401 Unauthorized (INVALID_REFRESH_TOKEN)
-    else Token expired
-        Auth-->>C: 401 Unauthorized (REFRESH_TOKEN_EXPIRED)
-    else Token Valid
-        Auth->>DB: prisma.$transaction(revoke old token, create new token)
-        Auth->>Token: issueAccessToken(user)
-        Auth-->>C: 200 OK { accessToken, refreshToken }
-    end
-```
-
----
-
-## 6. Conversation Management & Revision Tracking
-
-Implemented in [`server/src/modules/conversations/`](file:///c:/Users/Dell/Desktop/AI/server/src/modules/conversations/).
-
-### Key Behaviors
-- **Soft Deletion**: Conversations are deleted by setting `status = DELETED` and `deletedAt = now()`. Soft-deleted conversations are excluded from queries and cannot be used for new messages or voice sessions.
-- **Turn Revision Tracking**: When an existing turn is edited or corrected by the user, the original message is preserved and a `MessageRevision` record is appended with a monotonic `revisionNumber` and `previousContent`.
-- **Pagination**: Implements cursor-based pagination ordering by `[createdAt desc, id desc]` in [`context.service.ts`](file:///c:/Users/Dell/Desktop/AI/server/src/modules/conversations/context.service.ts).
-
----
-
-## 7. Profile Memory Manager
-
-Implemented in [`server/src/modules/memories/`](file:///c:/Users/Dell/Desktop/AI/server/src/modules/memories/).
-
-### Two-Phase Anti-Fabrication Memory Architecture
-
-BhashaAgent enforces a strict **Human-in-the-Loop** model. The AI agent can never directly write facts to a user's permanent profile memory.
-
-```mermaid
-stateDiagram-v2
-    [*] --> Extraction: AI detects user fact from conversation
-    Extraction --> PendingProposal: Create MemoryChangeRequest (status: PENDING)
-    
-    state Decision {
-        PendingProposal --> ApprovedMemory: User clicks APPROVE in Dashboard
-        PendingProposal --> RejectedProposal: User clicks REJECT in Dashboard
-    }
-
-    ApprovedMemory --> ActiveProfileMemory: Written to profile_memories (isApproved: true)
-    RejectedProposal --> Archive: Marked REJECTED (reason stored)
-    ActiveProfileMemory --> UserUpdate: User manually edits fact
-    ActiveProfileMemory --> SoftDelete: User clicks DELETE (deletedAt: now())
-```
-
-- **Candidate Proposals**: Extracted facts are stored as `MemoryChangeRequest` with `status: PENDING`.
-- **Promotion to Established Memory**: Only when `POST /api/v1/memories/proposals/:id/approve` is called by the authenticated user does the system create or update a `ProfileMemory` record (`isApproved: true`).
-- **Composite Key Constraint**: `@@unique([userId, category, key])` prevents duplicate fact keys per user.
-
----
-
-## 8. Form Task Manager & Lifecycle
-
-Implemented in [`server/src/modules/form-tasks/`](file:///c:/Users/Dell/Desktop/AI/server/src/modules/form-tasks/).
-
-### Form Task State Transitions
-A form task tracks a detected webpage form across its lifecycle:
-`CREATED` -> `FIELDS_DETECTED` -> `MAPPING_IN_PROGRESS` -> `AWAITING_INFORMATION` -> `REVIEW` -> `AWAITING_FINAL_APPROVAL` -> `APPROVED_FOR_FILLING` -> `COMPLETED` (or `FAILED` / `CANCELLED`).
-
-### Immutability & Approval Snapshots
-When a user approves a form task for filling (`POST /api/v1/form-tasks/:id/approve`), the backend compiles an immutable `ApprovalSnapshot` containing:
-1. Exact field IDs and stable selectors.
-2. Approved string/boolean/number values.
-3. The specific task `version`.
-4. User identity and timestamp.
-
-If any field value changes afterward, the `version` increments and the snapshot is invalidated, preventing stale or unauthorized DOM filling.
-
----
-
-## 9. Context Builder
-
-Implemented in [`server/src/modules/context/`](file:///c:/Users/Dell/Desktop/AI/server/src/modules/context/).
-
-The Context Builder compiles an isolated, budget-constrained `AgentContext` object provided to the LLM orchestrator:
+## 4. Backend Architecture Diagram
 
 ```mermaid
 flowchart TD
-    subgraph Inputs["Context Sources"]
-        User["User Profile & Preferred Language"]
-        History["Conversation History (Recent Messages + Corrections)"]
-        Memory["Approved Profile Memories (Established Facts Only)"]
-        Form["Active Form Task (Detected Fields + Proposed Values)"]
+    subgraph Ingress ["API & Gateway Ingress"]
+        HTTPReq["HTTP Request"] --> CORS["CORS Middleware"]
+        CORS --> RateLimit["Rate Limiter"]
+        RateLimit --> BodyParser["JSON Body Parser (32kb limit)"]
+        WSReq["WebSocket Request"] --> AuthWS["WebSocket Auth Validator"]
     end
 
-    subgraph Builder["ContextBuilder (context.service.ts)"]
-        Sanitize["Sanitize & Redact Passwords"]
-        Filter["Filter Unapproved Proposals"]
-        Budget["Apply Token Budget (Recent: 20, Older: 10)"]
-        Diagnostics["Generate Omission Warnings & Metadata"]
+    subgraph AuthLayer ["Authentication Layer"]
+        BodyParser --> AuthMiddleware["JWT Auth Middleware"]
+        AuthMiddleware --> TokenVerif["Verify Access Token<br/>Check User Active Status"]
     end
 
-    subgraph Output["Output"]
-        AgentContext["AgentContext (Strict JSON Structure)"]
+    subgraph Controllers ["Controllers & Routers"]
+        TokenVerif --> AuthRouter["Auth Routes (/api/v1/auth)"]
+        TokenVerif --> ConvRouter["Conversation Routes (/api/v1/conversations)"]
+        TokenVerif --> FormRouter["Form Task Routes (/api/v1/form-tasks)"]
+        TokenVerif --> BrowserRouter["Browser Routes (/api/v1/browser)"]
+        TokenVerif --> MemoryRouter["Memory Routes (/api/v1/memories)"]
+        TokenVerif --> TurnRouter["Agent Turn Route (/api/v1/conversations/:id/turns)"]
+        AuthWS --> VoiceGateway["Voice Gateway (/api/v1/voice/ws)"]
     end
 
-    Inputs --> Builder
-    Builder --> Output
+    subgraph Intelligence ["Form Intelligence & Orchestration"]
+        TurnRouter --> IntentClassifier["Centralized Intent Classifier"]
+        IntentClassifier --> FormActionRouter["Deterministic Form Action Router"]
+        FormActionRouter --> TargetValidator["Instruction-to-Target Field Validator"]
+        TargetValidator --> ScriptConverter["Devanagari / Latin Script Converter"]
+        
+        TurnRouter --> ContextBuilder["Context Builder"]
+        ContextBuilder --> AgentOrchestrator["Agent Orchestrator"]
+        VoiceGateway --> AgentOrchestrator
+        
+        AgentOrchestrator --> ToolRegistry["Tool Registry (7 Tools)"]
+        AgentOrchestrator --> ProviderFactory["LLM Provider Factory"]
+        AgentOrchestrator --> ClaimSanitizer["False Claim Sanitizer"]
+    end
+
+    subgraph LLMLayer ["LLM Provider Layer"]
+        ProviderFactory --> GeminiSDK["Google Gemini 2.5 Flash"]
+        ProviderFactory --> GeminiLite["Gemini Flash Lite (Quota Fallback)"]
+        ProviderFactory --> GroqHTTP["Groq HTTP Provider (Secondary Fallback)"]
+    end
+
+    subgraph Persistence ["Persistence Layer (Prisma Client)"]
+        Controllers --> Prisma["Prisma Client"]
+        Intelligence --> Prisma
+        Prisma --> Postgres[(PostgreSQL 15+)]
+    end
 ```
-
-### Context Guarantees
-- **No Unapproved Memories**: Pending memory proposals are strictly excluded from established facts.
-- **Correction Awareness**: Previous message revisions are included so the model knows what was corrected.
-- **Budget Truncation**: When conversation history exceeds budget, older turns are pruned and logged in `contextMetadata.omittedItems`.
 
 ---
 
-## 10. Agent Orchestrator & Multi-Turn Loop
+## 5. Authentication, Authorization & Token Lifecycle
 
-Implemented in [`server/src/modules/agent/`](file:///c:/Users/Dell/Desktop/AI/server/src/modules/agent/).
-
-```mermaid
-sequenceDiagram
-    autonumber
-    participant U as User Utterance
-    participant Orch as AgentOrchestrator
-    participant Prompt as System Prompt & Policy
-    participant LLM as LLM Provider (Gemini/Groq)
-    participant Tools as Tool Registry
-    participant Val as Response Validator (Zod)
-
-    U->>Orch: processAgentTurn(userId, conversationId, message)
-    Orch->>Prompt: Build prompt with conversational language policy
-    loop Multi-Round Loop (Max 4 Rounds)
-        Orch->>LLM: generateTurn(messages, tools, context)
-        LLM-->>Orch: Response (Tool Calls OR Decision JSON)
-        alt LLM calls Native Tools
-            Orch->>Tools: Execute Allowlisted Tool (e.g. retrieve_context)
-            Tools-->>Orch: Tool Result Payload
-            Orch->>Orch: Append Tool Result to turn history
-        else LLM returns Decision JSON
-            Orch->>Val: Validate structured JSON with Zod
-            alt Valid Decision
-                Orch->>Orch: Break loop
-            else Invalid / Repaired
-                Orch->>Orch: Attempt deterministic repair or retry turn
-            end
-        end
-    end
-    Orch->>U: Final Natural Language Response
-```
-
-### Anti-Fabrication Verifier
-In [`agent.tools.ts`](file:///c:/Users/Dell/Desktop/AI/server/src/modules/agent/agent.tools.ts), `propose_field_value` invokes:
-```typescript
-isValueGroundedInUserUtterance(field, resolvedValue, context)
-```
-If the LLM attempts to propose a customer name, email, or telephone number that does **not** appear in the user's transcript and is **not** in approved profile memory, the tool call is rejected with an ungrounded value warning.
+Implemented in [server/src/modules/auth/](server/src/modules/auth/):
+- **Password Hashing**: Uses `argon2.hash(password, { type: argon2.argon2id })` with unique cryptographically random salts. Plaintext passwords are never stored or logged.
+- **Access Tokens**: Short-lived JWTs (`JWT_ACCESS_EXPIRES_IN=15m`), signed with `JWT_ACCESS_SECRET` using HMAC SHA-256. Payload contains `userId`, `email`, and standard claims (`iss`, `aud`, `exp`).
+- **Refresh Tokens**: Long-lived tokens (`REFRESH_TOKEN_EXPIRES_IN_DAYS=7`). Cryptographic SHA-256 hashes of refresh tokens are stored in the `RefreshToken` database table.
+- **Token Rotation**: Each call to `POST /api/v1/auth/refresh` revokes the supplied refresh token and issues a newly generated pair. If an already-revoked refresh token is presented, all refresh tokens for that user are revoked immediately (reuse detection).
+- **Ownership Validation**: All conversation, memory, and form endpoints verify that the requested resource belongs to `request.user.id`, returning `404 NOT_FOUND` for foreign resource IDs.
 
 ---
 
-## 11. LLM Provider Abstraction Layer
+## 6. Complete REST API Reference
 
-Implemented in [`server/src/modules/llm/`](file:///c:/Users/Dell/Desktop/AI/server/src/modules/llm/).
+All successful responses follow the envelope: `{ "success": true, "data": ... }`. Errors return `{ "success": false, "error": { "code": string, "message": string } }`.
 
-### Provider Architecture
-```mermaid
-classDiagram
-    class LLMProvider {
-        <<interface>>
-        +generateTurn(request: LLMRequest): Promise~LLMResponse~
+### 6.1 Authentication (`/api/v1/auth`)
+
+| Method | Endpoint | Auth | Purpose |
+| :--- | :--- | :---: | :--- |
+| `POST` | `/api/v1/auth/register` | No | Register a new user account with email, password (min 12 chars), full name, and preferred language. |
+| `POST` | `/api/v1/auth/login` | No | Authenticate with email/password; returns access token, refresh token, and user profile. |
+| `POST` | `/api/v1/auth/refresh` | No | Exchange a valid refresh token for a new access token and rotated refresh token. |
+| `POST` | `/api/v1/auth/logout` | Yes | Revokes the current refresh token session. |
+| `POST` | `/api/v1/auth/logout-all` | Yes | Revokes all active refresh token sessions for the authenticated user. |
+
+### 6.2 User Profile (`/api/v1/users`)
+
+| Method | Endpoint | Auth | Purpose |
+| :--- | :--- | :---: | :--- |
+| `GET` | `/api/v1/users/me` | Yes | Retrieve authenticated user profile, preferred language, and account status. |
+| `PATCH`| `/api/v1/users/me` | Yes | Update user profile facts (full name, preferred language). |
+
+### 6.3 Conversations (`/api/v1/conversations`)
+
+| Method | Endpoint | Auth | Purpose |
+| :--- | :--- | :---: | :--- |
+| `POST` | `/api/v1/conversations` | Yes | Create a new conversation session with optional title and language. |
+| `GET` | `/api/v1/conversations` | Yes | List paginated conversations for the user with status filtering. |
+| `GET` | `/api/v1/conversations/:id` | Yes | Retrieve conversation details and active form task associations. |
+| `PATCH`| `/api/v1/conversations/:id` | Yes | Update conversation title or archive/activate status. |
+| `DELETE`| `/api/v1/conversations/:id`| Yes | Soft-delete a conversation session. |
+| `GET` | `/api/v1/conversations/:id/messages` | Yes | Retrieve paginated message history with revisions. |
+
+### 6.4 Agent Turns (`/api/v1/conversations/:id/turns`)
+
+| Method | Endpoint | Auth | Purpose |
+| :--- | :--- | :---: | :--- |
+| `POST` | `/api/v1/conversations/:id/turns` | Yes | Submit a user text turn. Triggers intent classification, deterministic routing, or agent orchestrator loop, returning assistant response and executable `formActions`. |
+
+**Request Body (`agentTurnSchema`)**:
+```json
+{
+  "content": "email address mein adarshjha@gmail.com likho",
+  "language": "hinglish",
+  "formTaskId": "550e8400-e29b-41d4-a716-446655440000"
+}
+```
+
+**Response Data**:
+```json
+{
+  "assistantMessageId": "uuid",
+  "response": "Maine email address update kar diya hai. Kya aap apna customer name batana chahenge?",
+  "intent": { "primary": "FIELD_VALUE_UPDATE", "confidence": 1.0 },
+  "language": { "detected": "hinglish", "responseLanguage": "hinglish" },
+  "formActions": [
+    {
+      "actionType": "SET_VALUE",
+      "fieldIdentifier": "custemail",
+      "value": "adarshjha@gmail.com"
     }
-    class GeminiLLMProvider {
-        -ai: GoogleGenAI
-        -primaryModel: string
-        -fallbackModel: string
-        +generateTurn(request)
-        -executeWithFallback()
-    }
-    class HttpLLMProvider {
-        -baseUrl: string
-        -apiKey: string
-        +generateTurn(request)
-    }
-    class LLMFactory {
-        +getLLMProvider(): LLMProvider
-        +setLLMProviderForTests(mock)
-    }
-
-    LLMProvider <|.. GeminiLLMProvider
-    LLMProvider <|.. HttpLLMProvider
-    LLMFactory ..> LLMProvider
+  ]
+}
 ```
 
-- **GeminiLLMProvider**: Connects via `@google/genai`. Features automatic fallback from `gemini-2.5-flash` to `gemini-flash-lite-latest` when receiving rate limits (HTTP 429) or transient server errors (HTTP 503).
-- **HttpLLMProvider**: Connects to OpenAI-compatible REST endpoints (e.g. Groq).
+### 6.5 Form Tasks (`/api/v1/form-tasks`)
+
+| Method | Endpoint | Auth | Purpose |
+| :--- | :--- | :---: | :--- |
+| `GET` | `/api/v1/form-tasks/:id` | Yes | Retrieve a FormTask including detected fields, proposals, and lifecycle status. |
+| `POST` | `/api/v1/form-tasks/:id/fields/:fieldId/values` | Yes | Directly set a proposed value for a field (`USER_PROVIDED`). |
+| `POST` | `/api/v1/form-tasks/:id/map` | Yes | Execute intelligent mapping of user profile facts against detected fields. |
+
+### 6.6 Browser Registration & Execution (`/api/v1/browser`)
+
+| Method | Endpoint | Auth | Purpose |
+| :--- | :--- | :---: | :--- |
+| `POST` | `/api/v1/browser/register` | Yes | Ingest detected form fields from the in-page content script and upsert `FormTask`. |
+| `POST` | `/api/v1/browser/executions/:id/acknowledge` | Yes | Ingest DOM readback verification results after execution. |
+
+### 6.7 Profile Memory (`/api/v1/memories`)
+
+| Method | Endpoint | Auth | Purpose |
+| :--- | :--- | :---: | :--- |
+| `GET` | `/api/v1/memories` | Yes | List verified user profile facts across categories. |
+| `POST` | `/api/v1/memories` | Yes | Create a new profile fact (status: `APPROVED`). |
+| `DELETE`| `/api/v1/memories/:id` | Yes | Remove a profile fact from active context. |
+| `POST` | `/api/v1/memories/proposals/:id/review` | Yes | User approves or rejects a pending memory candidate proposed by the agent. |
+
+### 6.8 Context Retrieval (`/api/v1/context`)
+
+| Method | Endpoint | Auth | Purpose |
+| :--- | :--- | :---: | :--- |
+| `GET` | `/api/v1/conversations/:id/context` | Yes | Inspect the assembled context payload built for the LLM. |
+
+### 6.9 Voice Session Initialization (`/api/v1/voice`)
+
+| Method | Endpoint | Auth | Purpose |
+| :--- | :--- | :---: | :--- |
+| `POST` | `/api/v1/voice/sessions` | Yes | Request a temporary voice streaming session token. |
 
 ---
 
-## 12. Browser Integration & Execution Protocol (bhasha.browser.v1)
+## 7. Agent Orchestrator & Multi-Turn Loop
 
-Implemented in [`server/src/modules/browser/`](file:///c:/Users/Dell/Desktop/AI/server/src/modules/browser/).
+The Agent Orchestrator ([server/src/modules/agent/agent.orchestrator.ts](server/src/modules/agent/agent.orchestrator.ts)) coordinates conversational turns, context building, tool execution, and response synthesis.
 
-### Protocol Specification
-- **Protocol Version**: Strictly `bhasha.browser.v1`.
-- **Idempotency Barrier**: Every session registration requires an `idempotencyKey` and stores a SHA-256 `idempotencyHash` computed from `(userId + pageUrl + fingerprint)`. Duplicate registrations return the existing session.
-- **Supported Action Allowlist**:
-  - `SET_VALUE`: Inputs values, dispatches `focus`, `input`, `change`, `blur`. Preserves Devanagari Hindi and Marathi characters.
-  - `SELECT_OPTION`: Matches select elements by text label or value.
-  - `CLICK`: Simulates trusted clicks on checkboxes or radio controls.
-  - `CHECK` / `UNCHECK`: Updates boolean checkbox state.
-  - `SUBMIT`: Submits forms upon explicit user approval.
+### 7.1 Context Builder & Token Budgeting
 
----
+Assembles data from 4 isolated sources up to an adaptive token budget (default: 2048 tokens):
+1. **Recent Messages**: Up to 15 recent turns in chronological order.
+2. **Relevant Older Context**: Vector- or keyword-matched prior turns.
+3. **Approved Profile Memories**: Filtered by relevance to the active webpage form.
+4. **Active Form Task**: Detected form fields with labels, types, and current DOM states.
 
-## 13. Voice Gateway & WebSocket Streaming (bhasha.voice.v1)
+### 7.2 Agent Tool Registry (7 Tools)
 
-Implemented in [`server/src/modules/voice/`](file:///c:/Users/Dell/Desktop/AI/server/src/modules/voice/).
+Located at [server/src/modules/agent/agent.tools.ts](server/src/modules/agent/agent.tools.ts):
 
-### Dual Transport & Real-Time Voice Lifecycle
+| Tool Name | Purpose | Output |
+| :--- | :--- | :--- |
+| `retrieve_context` | Re-queries the full conversation and form task context. | Context object |
+| `retrieve_approved_memories`| Fetches all approved profile facts for the user. | Memory facts array |
+| `list_form_tasks` | Lists active form tasks associated with the conversation. | Task summaries |
+| `retrieve_form_task` | Retrieves details for a specific `FormTask`. | Form task payload |
+| `propose_profile_memory` | Proposes a new candidate fact (`PENDING`) for user review. | Proposed fact record |
+| `propose_field_value` | Sets a value for a detected field, validating target matching. | Proposal record |
+| `run_intelligent_mapping` | Automatically maps approved memories to empty form fields. | Mapping results array |
 
-```mermaid
-sequenceDiagram
-    autonumber
-    participant C as Client (Voice Orb)
-    participant HTTP as HTTP API (/api/v1/voice/ticket)
-    participant WS as WebSocket Gateway (/api/v1/voice/ws)
-    participant STT as Gnani Vachana STT
-    participant Orch as AgentOrchestrator
-    participant TTS as Gnani Timbre TTS
+### 7.3 Anti-Hallucination Claim Sanitization
 
-    C->>HTTP: POST /voice/ticket { conversationId }
-    HTTP-->>C: 200 OK { ticket, expiresAt } (60-second TTL)
-    C->>WS: Connect ws://.../voice/ws?ticket=... (Subprotocol: bhasha.voice.v1)
-    WS->>WS: Validate & consume single-use ticket
-    WS-->>C: SESSION_READY { sessionId }
-    loop Microphone Capture
-        C->>WS: Binary Frame (512 samples / 1024 bytes PCM16LE)
-        WS->>STT: Forward PCM16 frame
-    end
-    STT-->>WS: Final Transcript Event ("नमस्ते...")
-    WS->>WS: Resolve Turn Language (voice-language.ts)
-    WS->>Orch: processVoiceTranscript(text, language)
-    Orch-->>WS: Assistant Text Response
-    WS->>TTS: Stream Text to Timbre TTS
-    loop Audio Generation
-        TTS-->>WS: Audio Chunk (24 kHz PCM)
-        WS-->>C: TTS_AUDIO_CHUNK { audioChunkBase64 }
-    end
-    WS-->>C: TTS_AUDIO_COMPLETE
-```
+Implemented in `sanitizeFalseExecutionClaims()`:
+If an LLM response asserts that a form field was updated (e.g. *"I have selected large"* or *"I entered your email"*), the orchestrator inspects `toolResults` and live DOM execution receipts. If no tool ran or DOM verification failed, the false claim is intercepted and replaced with a truthful progress statement.
 
 ---
 
-## 14. Database Architecture & Prisma Schema
+## 8. Deterministic Form Action Router & Intent Classifier
 
-The database schema is defined in [`server/prisma/schema.prisma`](file:///c:/Users/Dell/Desktop/AI/server/prisma/schema.prisma) and consists of **18 models** and **15 enums**:
+Located at [server/src/modules/form-intelligence/](server/src/modules/form-intelligence/):
 
-### Entity-Relationship Diagram
+### 8.1 Centralized Intent Classification
+
+The classifier ([intent-classifier.ts](server/src/modules/form-intelligence/intent-classifier.ts)) runs **before** target field extraction to prevent generic conversational tokens from polluting form inputs:
+- `GENERAL_FORM_ASSISTANCE`: User asks for general form guidance (e.g., *"help me to fill this form"*, *"मला हा फॉर्म भरण्यास मदत करा"*). Returns an overview of form fields without attempting to match `"help"` as an input field.
+- `FORM_OVERVIEW`: User asks what the form contains (*"what fields are on this form"*).
+- `FIELD_INFORMATION_QUERY`: User asks about a specific field (*"what is customer name"*).
+- `FIELD_VALUE_UPDATE`: User provides a concrete value (*"email address mein adarshjha@gmail.com likho"*).
+- `CONVERT_FIELD_SCRIPT`: User asks to transliterate a field (*"customer name ko english mein likho"*).
+- `SELECT_ALL_CHECKBOXES`: User commands selecting all group items (*"select all toppings"*).
+- `OBSERVATION_CORRECTION`: User observes form state (*"see there are still empty"*).
+- `GENERAL_CONVERSATION`: Standard chit-chat.
+
+### 8.2 Instruction-to-Target Field Validation
+
+Implemented in [target-field-validator.ts](server/src/modules/form-intelligence/target-field-validator.ts):
+- Categorizes fields into entity types: `PERSON_NAME`, `ORGANIZATION_NAME`, `PHONE_NUMBER`, `POSTAL_CODE`, `EMAIL_ADDRESS`, `DATE_OF_BIRTH`, etc.
+- Prevents semantic cross-field matching: if the user says *"Add Adarsh Jha as customer name"*, candidate fields like `University Name`, `Company Name`, or `Attach Files` are strictly rejected, even if semantic similarity is high.
+
+### 8.3 Script Conversion & Transliteration
+
+Implemented in [script-converter.service.ts](server/src/modules/form-intelligence/script-converter.service.ts):
+- Phonetical character mapping preserving Devanagari Hindi/Marathi consonants, conjuncts, matras, and vowels.
+- Clean proper noun transliteration: `आदर्श झा` $\leftrightarrow$ `Adarsh Jha`, `राहुल शर्मा` $\leftrightarrow$ `Rahul Sharma`.
+- Never performs dictionary translation or invents surnames.
+
+### 8.4 Multi-Checkbox Group Handling
+
+- When the user asks to select all items in a checkbox set (e.g., *"select all toppings"*):
+  - In single grouped fields with `options`: Emits an array of all option values (`["bacon", "cheese", "onion", "mushroom"]`).
+  - In individual separate fields: Queries all checkboxes matching the group and emits an update for **every** element in that set.
+  - Never short-circuits into a false conversational claim if the user states the boxes are empty.
+
+---
+
+## 9. LLM Provider Layer & Fallback Engine
+
+Located at [server/src/modules/llm/](server/src/modules/llm/):
+
+### 9.1 Gemini 2.5 Flash Integration
+- Uses `@google/genai` SDK with native tool definitions.
+- Automatic parameter sanitization ensures JSON schema compatibility.
+
+### 9.2 Dynamic Quota Detection & Model Degradation
+- **HTTP 429 Classification**: Distinguishes between temporary rate limits with `Retry-After` headers and daily quota exhaustion (`RESOURCE_EXHAUSTED`).
+- Upon daily quota exhaustion, the model is marked exhausted for the session, immediately falling back to `gemini-flash-lite-latest` or Groq without freezing turns.
+
+### 9.3 Groq HTTP Provider Secondary Fallback
+- Configured via `GROQ_API_KEY` and `GROQ_BASE_URL`.
+- Provides an OpenAI-compatible REST chat completions interface with function-calling support.
+- Preserves tool definitions across fallbacks so secondary models can still generate valid form proposals.
+
+---
+
+## 10. Voice Gateway & WebSocket Architecture
+
+Located at [server/src/modules/voice/](server/src/modules/voice/):
+- **WebSocket Route**: `ws://localhost:5000/api/v1/voice/ws`.
+- **Speech-to-Text (STT)**: Bridges incoming 16 kHz binary PCM audio frames to Gnani Vachana streaming ASR.
+- **Turn Invocation**: Transcripts trigger `processVoiceTranscript()`, which executes the identical Agent Orchestrator pipeline as text chat turns.
+- **Text-to-Speech (TTS)**: Generated response text is streamed to Gnani Timbre TTS (`timbre-v3.0`, Shivani voice) producing 24 kHz linear PCM frames streamed back to the client.
+
+---
+
+## 11. Database Schema & Prisma Architecture
+
+### 11.1 Entity-Relationship Diagram
 
 ```mermaid
 erDiagram
     User ||--o{ RefreshToken : has
     User ||--o{ Conversation : owns
     User ||--o{ ProfileMemory : owns
-    User ||--o{ MemoryChangeRequest : requests
     User ||--o{ FormTask : owns
-    User ||--o{ Approval : creates
-    User ||--o{ BrowserPageSession : registers
-    User ||--o{ BrowserExecution : authorizes
+    User ||--o{ AuditLog : generates
 
     Conversation ||--o{ Message : contains
-    Message ||--o{ MessageRevision : tracks
     Conversation ||--o{ FormTask : associates
-    
-    FormTask ||--o{ DetectedField : contains
-    DetectedField ||--o{ FieldValue : has
-    FieldValue ||--o{ FieldValueRevision : tracks
-    FormTask ||--o{ FieldMapping : defines
-    FormTask ||--o{ TaskEvent : logs
-    FormTask ||--o{ BrowserPageSession : targets
-    FormTask ||--o{ BrowserExecution : executes
+    Message ||--o{ MessageRevision : tracks
 
-    BrowserExecution ||--o{ BrowserActionResult : records
-    Approval ||--o{ BrowserExecution : validates
+    ProfileMemory ||--o{ MemoryChangeRequest : audits
+
+    FormTask ||--o{ DetectedField : contains
+    FormTask ||--o{ TaskEvent : logs
+    FormTask ||--o{ Approval : records
+    FormTask ||--o{ BrowserPageSession : tracks
+    FormTask ||--o{ BrowserExecution : dispatches
+
+    DetectedField ||--o{ FieldValue : stores
+    DetectedField ||--o{ FieldMapping : maps
+    DetectedField ||--o{ BrowserActionResult : receives
+    FieldValue ||--o{ FieldValueRevision : versions
 ```
 
-### Models Summary
+### 11.2 Core Data Models
 
-| Model | Table Name | Purpose | Key Constraints |
-| :--- | :--- | :--- | :--- |
-| `User` | `users` | Authenticated user accounts | `email` (unique) |
-| `RefreshToken` | `refresh_tokens` | Hashed refresh tokens | `token_hash` (unique), Cascade on User |
-| `Conversation` | `conversations` | Conversation sessions | Index on `[userId, lastMessageAt]` |
-| `Message` | `messages` | Chat messages (User, Assistant, System) | Cascade on Conversation |
-| `MessageRevision` | `message_revisions` | History of edited messages | `@@unique([messageId, revisionNumber])` |
-| `ProfileMemory` | `profile_memories` | Approved user profile facts | `@@unique([userId, category, key])` |
-| `MemoryChangeRequest` | `memory_change_requests` | Pending candidate memory proposals | Index on `[userId, status]` |
-| `FormTask` | `form_tasks` | Detected webpage form task | Versioned, state machine tracking |
-| `DetectedField` | `detected_fields` | Form inputs, selects, textareas | `@@unique([formTaskId, fieldIdentifier])` |
-| `FieldValue` | `field_values` | Proposed/approved values for fields | Source attribution, confidence score |
-| `FieldValueRevision` | `field_value_revisions` | History of field values | Cascade on FieldValue |
-| `FieldMapping` | `field_mappings` | Heuristic mappings to memories | `@@unique([formTaskId, detectedFieldId])` |
-| `Approval` | `approvals` | Immutable approval snapshots | Stores immutable `approvedSnapshot` JSON |
-| `TaskEvent` | `task_events` | Form task audit events | Cascade on FormTask |
-| `BrowserPageSession` | `browser_page_sessions` | Registered webpage browser sessions | `@@unique([userId, idempotencyKey])` |
-| `BrowserExecution` | `browser_executions` | Authorized DOM fill instructions | `@@unique([userId, idempotencyKey])` |
-| `BrowserActionResult` | `browser_action_results` | DOM execution results per field | `@@unique([executionId, fieldId])` |
-| `AuditLog` | `audit_logs` | Security and compliance audit log | Index on `[userId, createdAt]` |
+- **`User`**: Account identity, Argon2id password hash, role (`USER`, `ADMIN`), and preferred language (`en`, `hi`, `mr`, `hinglish`).
+- **`RefreshToken`**: SHA-256 hashed refresh tokens with expiration and revocation metadata.
+- **`Conversation`**: Multi-turn chat session with soft-deletion and language preferences.
+- **`Message`**: Individual conversational turn (`USER`, `ASSISTANT`, `SYSTEM`) with detected language metadata and revision history.
+- **`ProfileMemory`**: Two-phase verified user facts categorized by `IDENTITY`, `CONTACT`, `ADDRESS`, `PREFERENCE`, or `PROFESSIONAL`.
+- **`FormTask`**: Active webpage form context bound to a conversation and webpage URL.
+- **`DetectedField`**: Scanned form input with label, inputType, elementType, options JSON, sensitivity classification, and order.
+- **`FieldValue`**: Current and proposed values for a field with confidence score, source (`USER_PROVIDED`, `APPROVED_PROFILE_MEMORY`), and execution status (`READY`, `EXECUTED`, `FAILED`).
+- **`BrowserPageSession`**: Tracks the in-page content script connection for the active tab.
 
----
+### 11.3 Migrations & Database Setup
 
-## 15. Complete API Reference
+```bash
+# Apply migrations to development database
+npm run db:migrate
 
-All protected endpoints require `Authorization: Bearer <access_token>`.
+# Generate Prisma Client
+npm run db:generate
 
-### Authentication & Users
+# Deploy migrations to production database (non-destructive)
+npm run db:deploy
 
-| Method | Endpoint | Auth | Purpose | Payload Summary |
-| :--- | :--- | :---: | :--- | :--- |
-| `POST` | `/api/v1/auth/register` | No | Register new user | `{ email, password, fullName, preferredLanguage? }` |
-| `POST` | `/api/v1/auth/login` | No | Authenticate user | `{ email, password }` |
-| `POST` | `/api/v1/auth/refresh` | No | Rotate refresh token | `{ refreshToken }` |
-| `POST` | `/api/v1/auth/logout` | No | Revoke active token | `{ refreshToken }` |
-| `GET` | `/api/v1/users/me` | Yes | Inspect current user | None |
-
-### Conversations & Messages
-
-| Method | Endpoint | Auth | Purpose | Payload Summary |
-| :--- | :--- | :---: | :--- | :--- |
-| `POST` | `/api/v1/conversations` | Yes | Create conversation | `{ title?, language? }` |
-| `GET` | `/api/v1/conversations` | Yes | List conversations | Query: `limit`, `cursor`, `status` |
-| `GET` | `/api/v1/conversations/:id` | Yes | Get conversation details | None |
-| `PATCH` | `/api/v1/conversations/:id` | Yes | Update conversation title/status | `{ title?, status? }` |
-| `DELETE` | `/api/v1/conversations/:id` | Yes | Soft-delete conversation | None |
-| `POST` | `/api/v1/conversations/:id/messages` | Yes | Send message | `{ content, inputMode?, language? }` |
-| `GET` | `/api/v1/conversations/:id/messages` | Yes | List messages (paginated) | Query: `limit`, `beforeMessageId` |
-| `POST` | `/api/v1/conversations/:id/messages/:mId/correct` | Yes | Correct previous turn | `{ correctedContent }` |
-
-### Profile Memories
-
-| Method | Endpoint | Auth | Purpose | Payload Summary |
-| :--- | :--- | :---: | :--- | :--- |
-| `GET` | `/api/v1/memories` | Yes | List approved memories | Query: `category`, `search` |
-| `GET` | `/api/v1/memories/proposals` | Yes | List pending proposals | Query: `status` (`PENDING`) |
-| `POST` | `/api/v1/memories/proposals` | Yes | Create manual proposal | `{ category, key, value }` |
-| `POST` | `/api/v1/memories/proposals/:id/approve` | Yes | Approve proposal into memory | None |
-| `POST` | `/api/v1/memories/proposals/:id/reject` | Yes | Reject proposal | `{ reason? }` |
-| `PATCH` | `/api/v1/memories/:id` | Yes | Update approved memory | `{ value }` |
-| `DELETE` | `/api/v1/memories/:id` | Yes | Soft-delete memory | None |
-
-### Form Tasks & Form Intelligence
-
-| Method | Endpoint | Auth | Purpose | Payload Summary |
-| :--- | :--- | :---: | :--- | :--- |
-| `POST` | `/api/v1/form-tasks` | Yes | Create form task | `{ conversationId, webpageUrl, webpageTitle?, fields? }` |
-| `GET` | `/api/v1/form-tasks` | Yes | List form tasks | Query: `status`, `limit` |
-| `GET` | `/api/v1/form-tasks/:id` | Yes | Get form task & fields | None |
-| `POST` | `/api/v1/form-tasks/:id/fields/:fId/approve` | Yes | Approve field value | None |
-| `POST` | `/api/v1/form-tasks/:id/fields/:fId/reject` | Yes | Reject field value | `{ reason? }` |
-| `POST` | `/api/v1/form-tasks/:id/approve` | Yes | Create final approval snapshot | `{ expectedVersion }` |
-| `POST` | `/api/v1/form-intelligence/match` | Yes | Match fields to memories | `{ fields: [...] }` |
-
-### Agent & Context
-
-| Method | Endpoint | Auth | Purpose | Payload Summary |
-| :--- | :--- | :---: | :--- | :--- |
-| `POST` | `/api/v1/context/build` | Yes | Build unified context | `{ conversationId, currentMessage }` |
-| `POST` | `/api/v1/agent/turn` | Yes | Execute agent AI turn | `{ conversationId, message, formTaskId? }` |
-
-### Browser Automation & Voice
-
-| Method | Endpoint | Auth | Purpose | Payload Summary |
-| :--- | :--- | :---: | :--- | :--- |
-| `POST` | `/api/v1/browser/register` | Yes | Register browser tab session | `{ formTaskId, pageUrl, fingerprint, idempotencyKey }` |
-| `POST` | `/api/v1/browser/instructions` | Yes | Fetch pending fill instructions | `{ pageSessionId, taskVersion }` |
-| `POST` | `/api/v1/browser/executions/:id/acknowledge` | Yes | Acknowledge DOM results | `{ results: [...] }` |
-| `POST` | `/api/v1/voice/ticket` | Yes | Generate single-use ticket | `{ conversationId, formTaskId?, language? }` |
-| `WS` | `/api/v1/voice/ws?ticket=...` | Ticket | Real-time audio streaming | Subprotocol: `bhasha.voice.v1` |
+# Validate Prisma schema
+npm run db:validate
+```
 
 ---
 
-## 16. Environment Configuration Reference
+## 12. Environment Configuration Reference
 
-Configuration is managed in [`server/src/config/environment.ts`](file:///c:/Users/Dell/Desktop/AI/server/src/config/environment.ts):
+Configuration is validated via Zod in [server/src/config/environment.ts](server/src/config/environment.ts):
 
 | Variable | Required | Default | Purpose |
 | :--- | :---: | :---: | :--- |
-| `DATABASE_URL` | **Yes** | — | PostgreSQL connection string with `schema=public` |
-| `JWT_ACCESS_SECRET` | **Yes** | — | Secret string (minimum 32 characters) for signing JWTs |
-| `JWT_ACCESS_EXPIRES_IN` | No | `15m` | Lifetime of access tokens |
-| `REFRESH_TOKEN_EXPIRES_IN_DAYS` | No | `7` | Lifetime of refresh tokens in days |
-| `PORT` | No | `5000` | Port for the HTTP and WebSocket server |
-| `NODE_ENV` | No | `development` | Node execution environment |
-| `GEMINI_API_KEY` | Conditional | — | API key for Google Gemini provider |
-| `GEMINI_MODEL` | No | `gemini-2.5-flash` | Primary Gemini LLM model |
-| `GEMINI_FALLBACK_MODEL` | No | `gemini-flash-lite-latest` | Fallback model used on 429/503 errors |
-| `GROQ_API_KEY` | Optional | — | API key for alternative HTTP LLM provider |
-| `GROQ_MODEL` | Optional | — | Model name for alternative HTTP LLM provider |
-| `GNANI` | Optional | — | Unified API token for Gnani Vachana STT & Timbre TTS |
-| `GNANI_TTS_MODEL` | No | `timbre-v3.0` | Gnani TTS model name |
-| `GNANI_TTS_VOICE` | No | `Shivani` | Default voice identifier |
-| `GNANI_TTS_SAMPLE_RATE` | No | `24000` | Audio output sample rate (24 kHz linear PCM) |
-| `TEST_DATABASE_URL` | For Tests | — | Dedicated test database URL (prevents test data polluting dev) |
+| `NODE_ENV` | Yes | `development` | Runtime environment (`development`, `production`, `test`). |
+| `PORT` | Yes | `5000` | Port for Express HTTP and WebSocket server. |
+| `DATABASE_URL` | Yes | - | PostgreSQL connection URL. |
+| `TEST_DATABASE_URL`| Yes | - | PostgreSQL test database URL. |
+| `JWT_ACCESS_SECRET`| Yes | - | Secret for signing JWT access tokens ($\ge 32$ characters). |
+| `JWT_ACCESS_EXPIRES_IN` | No | `15m` | Lifetime of access tokens. |
+| `REFRESH_TOKEN_EXPIRES_IN_DAYS` | No | `7` | Lifetime of refresh tokens in days. |
+| `GEMINI_API_KEY` | Yes | - | Google Gemini API key. |
+| `GEMINI_MODEL` | No | `gemini-2.5-flash` | Primary Gemini model ID. |
+| `GEMINI_FALLBACK_MODEL` | No | `gemini-flash-lite-latest` | Secondary Gemini model on quota exhaustion. |
+| `GROQ_API_KEY` | No | - | Optional Groq API key for provider fallback. |
+| `GROQ_MODEL` | No | `openai/gpt-oss-20b` | Groq fallback model ID. |
+| `GNANI` | No | - | Optional Gnani.ai token for STT and TTS streaming. |
 
 ---
 
-## 17. Security, Error Handling & Reliability
+## 13. Error Handling, Observability & Audit Logging
 
-1. **Centralized Error Handling**: All controllers bubble errors up to Express error middleware (`server.ts`). Known HTTP errors inherit from `HttpError` and emit clean error JSON:
-   ```json
-   {
-     "success": false,
-     "error": {
-       "code": "CONVERSATION_NOT_FOUND",
-       "message": "Conversation not found"
-     }
-   }
-   ```
-2. **Sensitive Data Masking**: [`llm-logger.ts`](file:///c:/Users/Dell/Desktop/AI/server/src/modules/llm/llm-logger.ts) filters logs via `sanitizeLogValue()`, redacting headers like `authorization`, passwords, and API keys.
-3. **Tenant Ownership Integrity**: Database queries verify `where: { userId: req.user.id }` across all models.
-4. **Rate Limiting**: Configured using `express-rate-limit` on sensitive routes (`/api/v1/auth/*` and `/api/v1/agent/turn`).
+- **Centralized Error Handler**: Handles all errors via `HttpError`, mapping status codes (`400 VALIDATION_ERROR`, `401 AUTHENTICATION_REQUIRED`, `403 FORBIDDEN`, `404 NOT_FOUND`, `409 CONFLICT`, `429 RATE_LIMITED`, `502 BAD_GATEWAY`).
+- **Observability Events**: Structured logging via `logObservabilityEvent()` recording:
+  - `INTENT_DETECTED` — User intent classification results
+  - `TARGET_VALIDATION_PERMITTED` / `TARGET_VALIDATION_REJECTED` — Instruction-to-target evaluation
+  - `FORM_FIELD_MATCHED` & `FORM_VALUE_MATCHED` — Field resolution metrics
+  - `FORM_PROPOSAL_CREATED` — Database proposal state
+  - `FORM_PROPOSAL_DELIVERED` — Action delivery to browser
+- **Audit Logs**: Persistent audit trail stored in `audit_logs` table for authentication, page registration, and field mutations.
 
 ---
 
-## 18. Automated Testing Suite (148 Passing Tests)
+## 14. Automated Testing Suite
 
-### Baseline Verification Result
-The test suite runs using Node's native test runner (`node --test`) with TypeScript compilation and PostgreSQL database isolation:
+The server includes 292 automated tests across 9 comprehensive suites:
 
 ```bash
-npm --prefix server test
+cd server
+npm test
 ```
 
-**Verified Test Baseline**: **148 tests passed across 5 test suites (exit code 0, 0 failed, 0 skipped)**.
+### Key Test Suites
+- **`intent-classification-routing.test.js`** (27 tests): Validates general form assistance, generic word protection, script transliteration, radio matching, and multi-checkbox group operations.
+- **`voice-to-dom-verification.test.js`** (10 tests): Validates end-to-end voice transcription, direct form routing, and DOM verification contracts.
+- **`existing-field-script-correction.test.js`** (24 tests): Validates phonetic Devanagari $\leftrightarrow$ Latin transliteration without surname distortion.
+- **`instruction-target-validation.test.js`** (12 tests): Validates entity category enforcement (`PERSON_NAME` vs `ORGANIZATION_NAME`, etc.).
+- **`provider-fallback.test.js`** (25 tests): Validates Gemini 429 quota handling, Groq HTTP fallback, and false execution claim sanitization.
+- **`browser.test.js`** (68 tests): Validates browser page session registration, execution tracking, and acknowledgements.
 
-### Test Directory Breakdown
+---
 
-| Directory | Primary Spec Files | Verified Coverage |
+## 15. Server Troubleshooting Guide
+
+| Issue | Likely Cause | Solution |
 | :--- | :--- | :--- |
-| `tests/agent/` | `agent.test.js`, `conversation-form-filling.test.js`, `multilingual-pipeline.test.js`, `e2e-regression-audit.test.js` | Multi-turn loops, tool execution, anti-fabrication grounding, language switching |
-| `tests/auth/` | `auth.test.js` | User registration, login, Argon2id validation, token rotation, logout |
-| `tests/browser/` | `browser.test.js` | Protocol v1 compliance, idempotency hash, action retry boundaries |
-| `tests/context/` | `context.test.js`, `context-task-resolution.test.js` | Context builder, token budgets, approved memory filtering |
-| `tests/conversations/`| `conversation.test.js` | Conversation CRUD, pagination, revisions, soft-deletion |
-| `tests/database/` | `foundation.test.js` | Foreign keys, composite ownership keys, transactions, rollbacks |
-| `tests/form-intelligence/` | `form-intelligence.test.js`, `form-intelligence.integration.test.js` | Heuristic field matching, Devanagari normalization, dropdown option matching |
-| `tests/form-tasks/`| `form-task.test.js` | Form task state machine, field value lifecycle, approval snapshots |
-| `tests/llm/` | `gemini.test.js`, `gemini-fallback.test.js`, `fallback-observability.test.js`, `tool-calling-parsing.test.js` | Gemini SDK integration, 429 fallback to lite model, structured tool-call parsing |
-| `tests/memories/` | `memory.test.js` | Proposal creation, human-in-the-loop approval, fact isolation |
-| `tests/voice/` | `voice.test.js`, `multilingual-stt.test.js`, `timbre.test.js` | WebSocket voice gateway, single-use tickets, Gnani STT/TTS adapters, barge-in |
-
----
-
-## 19. Installation, Local Development & Deployment
-
-### Prerequisites
-- **Node.js**: `v20.x` or later
-- **PostgreSQL**: `v15.x` or later running on `localhost:5432`
-
-### Setup Instructions
-
-```bash
-# 1. Install dependencies
-npm --prefix server install
-
-# 2. Configure environment
-cp server/.env.example server/.env
-# Edit server/.env and provide DATABASE_URL and JWT_ACCESS_SECRET (min 32 chars)
-
-# 3. Validate Prisma Schema
-npm --prefix server run db:validate
-
-# 4. Generate Prisma Client
-npm --prefix server run db:generate
-
-# 5. Apply Migrations to PostgreSQL
-npm --prefix server run db:migrate
-
-# 6. Build the Server
-npm --prefix server run build
-
-# 7. Run Automated Tests
-npm --prefix server test
-
-# 8. Start the Production Server
-npm --prefix server start
-```
-
-The server will listen on `http://0.0.0.0:5000` with the Voice WebSocket Gateway available at `ws://0.0.0.0:5000/api/v1/voice/ws`.
-
----
-
-## 20. Troubleshooting Guide
-
-| Issue | Likely Cause | Verified Resolution |
-| :--- | :--- | :--- |
-| **Server crashes with `JWT_ACCESS_SECRET must be at least 32 characters`** | `JWT_ACCESS_SECRET` in `.env` is too short or missing. | Generate a secure 32+ character random secret and update `.env`. |
-| **Prisma throws `P1001: Can't reach database server`** | PostgreSQL is stopped or credentials in `DATABASE_URL` are incorrect. | Verify PostgreSQL service is running and `DATABASE_URL` credentials are valid. |
-| **Voice WebSocket closes with code `1008` (Policy Violation)** | Connecting with an expired or reused voice ticket. | Call `POST /api/v1/voice/ticket` immediately before establishing the WebSocket connection. |
-| **LLM returns `UNGROUNDED_VALUE` during form filling** | AI agent attempted to fabricate a field value not present in user speech or memory. | User must explicitly state the value in speech or approve it in Profile Memory first. |
-| **Tests fail with `TEST_DATABASE_URL is required`** | `TEST_DATABASE_URL` is missing from `server/.env`. | Define `TEST_DATABASE_URL` pointing to a test database in `server/.env`. |
-
----
-
-## 21. Developer Contribution Guidelines
-
-When adding new features to the backend:
-
-1. **Keep Controllers Thin**: Controllers should only parse inputs with Zod, extract `req.user.id`, invoke a service, and return standard JSON.
-2. **Isolate Database Access in Services**: Perform all Prisma queries inside domain services. Enforce `where: { userId }` on every query.
-3. **Add Zod Validators**: Validate all incoming HTTP payloads and WebSocket messages using Zod schemas before passing them to services.
-4. **Never Bypass Anti-Fabrication Rules**: When adding agent tools, ensure values are grounded in conversation context or user profile memory.
-5. **Preserve Indian Language Scripts**: Ensure string normalizers and database fields preserve Unicode Devanagari text (Hindi and Marathi).
-6. **Verify Before Submitting**:
-   ```bash
-   npm --prefix server run build
-   npm --prefix server test
-   ```
-   Both commands must pass with exit code `0`.
-
+| **`listen EADDRINUSE: 0.0.0.0:5000`** | Another node process is running on port 5000 | Terminate the existing process via task manager or command line: `Stop-Process -Id <PID> -Force`. |
+| **`PrismaClientInitializationError`** | PostgreSQL is not running or invalid `DATABASE_URL` | Verify PostgreSQL is active and credentials in `.env` are correct. Test connection with `psql`. |
+| **`Gemini API 429 RESOURCE_EXHAUSTED`** | Daily quota exceeded for current API key | The server will automatically degrade to `gemini-flash-lite-latest` or `groq`. Configure `GROQ_API_KEY` in `.env` for seamless fallback. |
+| **`NO_FIELD_MATCH` on form instruction** | Field label mismatch or entity category rejected | Verify that target field matches entity category (e.g. personal name for customer name field). Check observability logs for `TARGET_VALIDATION_REJECTED`. |
+| **`WebSocket connection failed`** | Port 5000 blocked or token missing | Verify that the server is running on `0.0.0.0:5000` and client passes valid session credentials. |

@@ -64,6 +64,7 @@ export const fieldSchema = z.object({
   detectionConfidence: confidence.default(1),
   options: json.optional(),
   fieldMetadata: json.optional(),
+  currentValue: z.unknown().optional(),
 }).passthrough();
 
 export const fieldsSchema = z.object({

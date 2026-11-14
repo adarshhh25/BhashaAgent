@@ -10,6 +10,7 @@
 import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { build } from 'vite';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, '..');
@@ -20,6 +21,23 @@ if (!existsSync(dist)) {
   console.error('Error: dist/ directory not found. Run "vite build" first.');
   process.exit(1);
 }
+
+// Build standalone IIFE content script without ES module chunk imports
+console.log('Building standalone content script (IIFE format)...');
+await build({
+  configFile: false,
+  build: {
+    emptyOutDir: false,
+    outDir: dist,
+    lib: {
+      entry: resolve(root, 'src/content/index.ts'),
+      name: 'BhashaAgentContent',
+      formats: ['iife'],
+      fileName: () => 'content.js',
+    },
+  },
+});
+console.log('✓ Built standalone IIFE content.js');
 
 // Copy manifest.json
 const manifestSrc = resolve(root, 'manifest.json');

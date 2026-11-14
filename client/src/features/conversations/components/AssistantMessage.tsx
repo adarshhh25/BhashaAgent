@@ -61,7 +61,12 @@ export function AssistantMessage({ message }: AssistantMessageProps) {
           </div>
 
           {/* Metadata pills (intent, decision, tool indicators) */}
-          {intent && intent !== 'GENERAL_QUESTION' && intent !== 'GREETING' && (
+          {intent &&
+            intent !== 'GENERAL_QUESTION' &&
+            intent !== 'GREETING' &&
+            intent !== 'GENERAL_FORM_ASSISTANCE' &&
+            intent !== 'HELP_REQUEST' &&
+            intent !== 'FORM_OVERVIEW' && (
             <div className="flex items-center gap-1.5 pl-1">
               <span className="inline-flex items-center gap-1 text-[10px] font-medium text-text-secondary bg-black/5 px-2 py-0.5 rounded-full">
                 <Wrench className="w-2.5 h-2.5" />

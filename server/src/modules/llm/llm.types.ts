@@ -25,6 +25,7 @@ export interface LLMRequest {
   responseFormat?: "json" | "text";
   requestId?: string;
   conversationId?: string;
+  signal?: AbortSignal;
 }
 
 export interface LLMToolCall {
@@ -43,6 +44,7 @@ export interface LLMResponse {
   attemptCount?: number;
   fallbackUsed?: boolean;
   fallbackReasons?: string[];
+  modelsAttempted?: string[];
   latencyMs?: number;
 }
 

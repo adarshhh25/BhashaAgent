@@ -250,6 +250,70 @@ async function resolveTask(userId: string, conversationId: string, taskId?: stri
   }
 
   if (candidates.length > 1) {
+    // 1. If all active tasks belong to the same webpage URL, resolve to the most recent one
+    const uniqueUrls = new Set(candidates.map((c) => c.webpageUrl).filter(Boolean));
+    if (uniqueUrls.size === 1) {
+      const bestCandidate = candidates[0];
+      return {
+        task: await getTask(userId, bestCandidate.id),
+        resolution: {
+          status: "resolved",
+          selectedTaskId: bestCandidate.id,
+          diagnostic: {
+            category: "RESOLVED",
+            resolvedTaskId: bestCandidate.id,
+          },
+        },
+      };
+    }
+
+    // 2. Check if only one candidate has active detected fields
+    const candidatesWithFields = await prisma.detectedField.groupBy({
+      by: ["formTaskId"],
+      where: {
+        formTaskId: { in: candidates.map((c) => c.id) },
+        status: "ACTIVE",
+      },
+      _count: { id: true },
+    });
+
+    const tasksWithActiveFields = candidatesWithFields.filter((c) => c._count.id > 0);
+    if (tasksWithActiveFields.length === 1) {
+      const selectedId = tasksWithActiveFields[0].formTaskId;
+      return {
+        task: await getTask(userId, selectedId),
+        resolution: {
+          status: "resolved",
+          selectedTaskId: selectedId,
+          diagnostic: {
+            category: "RESOLVED",
+            resolvedTaskId: selectedId,
+          },
+        },
+      };
+    }
+
+    // If multiple candidates have fields, check if they are for the same URL
+    if (tasksWithActiveFields.length > 1) {
+      const activeTaskIds = new Set(tasksWithActiveFields.map((t) => t.formTaskId));
+      const activeCandidates = candidates.filter((c) => activeTaskIds.has(c.id));
+      const activeUrls = new Set(activeCandidates.map((c) => c.webpageUrl).filter(Boolean));
+      if (activeUrls.size === 1) {
+        const bestCandidate = activeCandidates[0];
+        return {
+          task: await getTask(userId, bestCandidate.id),
+          resolution: {
+            status: "resolved",
+            selectedTaskId: bestCandidate.id,
+            diagnostic: {
+              category: "RESOLVED",
+              resolvedTaskId: bestCandidate.id,
+            },
+          },
+        };
+      }
+    }
+
     return {
       task: undefined,
       resolution: {
@@ -332,6 +396,7 @@ function taskProjection(taskResult: Awaited<ReturnType<typeof getTask>>) {
         isEmpty,
         isCollected,
         collectedValue: hasValue && latestValue ? (redacted ? "[REDACTED]" : latestValue.value) : undefined,
+        currentValue: hasValue && latestValue ? (redacted ? "[REDACTED]" : latestValue.value) : undefined,
         provenance,
         isApproved,
         isApplied,

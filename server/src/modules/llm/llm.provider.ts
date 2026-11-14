@@ -1,6 +1,8 @@
 import { config } from "../../config/environment";
 import { LLMError } from "./llm.errors";
 import type { LLMMessage, LLMProvider, LLMRequest, LLMResponse } from "./llm.types";
+import { sanitizeToolParameters } from "./gemini.provider";
+import { detectConversationLanguage } from "../agent/language-detector";
 
 function normalizeMessages(messages: LLMMessage[]): LLMMessage[] {
   return messages.map((m) => {
@@ -75,27 +77,63 @@ export class HttpLLMProvider implements LLMProvider {
 
     const maxRetries = Math.max(0, config.llm.maxRetries ?? 2);
 
+    if (request.signal?.aborted) {
+      throw new LLMError("REQUEST_CANCELLED", "Turn was cancelled before dispatch");
+    }
+
     for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+      if (request.signal?.aborted) {
+        throw new LLMError("REQUEST_CANCELLED", "Turn was cancelled by client");
+      }
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), request.timeoutMs ?? config.llm.timeoutMs);
+      const onAbort = () => controller.abort();
+      if (request.signal) {
+        request.signal.addEventListener("abort", onAbort, { once: true });
+      }
+
       try {
+        const hasTools = Boolean(request.tools && request.tools.length > 0);
+        const wantsJson = Boolean(
+          !hasTools && request.responseFormat === "json"
+        );
+
+        const normalized = normalizeMessages(request.messages);
+        if (wantsJson) {
+          const mentionsJson = normalized.some((m) => String(m.content).toLowerCase().includes("json"));
+          if (!mentionsJson) {
+            normalized.unshift({ role: "system", content: "You are a helpful assistant. Return valid JSON." });
+          }
+        }
+
+        const requestBody: Record<string, unknown> = {
+          model: request.model ?? config.llm.model,
+          messages: normalized,
+          temperature: request.temperature ?? config.llm.temperature,
+          max_tokens: request.maxOutputTokens ?? config.llm.maxOutputTokens,
+        };
+
+        if (hasTools) {
+          requestBody.tools = request.tools.map((tool) => ({
+            type: "function",
+            function: { name: tool.name, description: tool.description, parameters: sanitizeToolParameters(tool.inputSchema) },
+          }));
+          requestBody.tool_choice = request.toolChoice ?? "auto";
+        } else if (wantsJson) {
+          requestBody.response_format = { type: "json_object" };
+        }
+
         const response = await fetch(config.llm.baseUrl, {
           method: "POST",
           headers: { "content-type": "application/json", authorization: `Bearer ${config.llm.apiKey}` },
-          body: JSON.stringify({
-            model: request.model ?? config.llm.model,
-            messages: normalizeMessages(request.messages),
-            tools: request.tools.map((tool) => ({
-              type: "function",
-              function: { name: tool.name, description: tool.description, parameters: tool.inputSchema },
-            })),
-            ...(request.tools.length > 0 ? { tool_choice: request.toolChoice ?? "auto" } : {}),
-            temperature: request.temperature ?? config.llm.temperature,
-            max_tokens: request.maxOutputTokens ?? config.llm.maxOutputTokens,
-            ...(request.tools.length === 0 ? { response_format: { type: "json_object" } } : {}),
-          }),
+          body: JSON.stringify(requestBody),
           signal: controller.signal,
         });
+
+        clearTimeout(timeout);
+        if (request.signal) {
+          request.signal.removeEventListener("abort", onAbort);
+        }
 
         if (!response.ok) {
           const status = response.status;
@@ -139,14 +177,39 @@ export class HttpLLMProvider implements LLMProvider {
 
         const data = await response.json();
         const parsed = parseResponse(data);
+        let contentText = parsed.content;
+        if (parsed.toolCalls.length === 0 && request.responseFormat !== "text" && contentText) {
+          contentText = contentText.trim();
+          if (contentText.startsWith("```")) {
+            contentText = contentText.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+          }
+          if (!contentText.startsWith("{")) {
+            const proseLang = detectConversationLanguage(contentText);
+            contentText = JSON.stringify({
+              intent: { primary: "GENERAL_QUESTION", secondary: [], confidence: 0.9 },
+              language: { detected: proseLang, responseLanguage: proseLang },
+              decision: { type: "respond" },
+              toolCalls: [],
+              responseDraft: contentText,
+            });
+          }
+        }
         return {
           ...parsed,
+          content: contentText,
           model: request.model ?? config.llm.model,
           provider: "groq",
           attemptCount: attempt + 1,
           fallbackUsed: true,
         };
       } catch (error) {
+        clearTimeout(timeout);
+        if (request.signal) {
+          request.signal.removeEventListener("abort", onAbort);
+        }
+        if (request.signal?.aborted) {
+          throw new LLMError("REQUEST_CANCELLED", "Turn was cancelled by client");
+        }
         if (error instanceof LLMError) throw error;
         if (error instanceof Error && error.name === "AbortError") throw new LLMError("TIMEOUT", "Groq provider timed out");
         if (attempt < maxRetries) {
@@ -156,6 +219,9 @@ export class HttpLLMProvider implements LLMProvider {
         throw new LLMError("PROVIDER_UNAVAILABLE", "Groq provider is unavailable");
       } finally {
         clearTimeout(timeout);
+        if (request.signal) {
+          request.signal.removeEventListener("abort", onAbort);
+        }
       }
     }
 

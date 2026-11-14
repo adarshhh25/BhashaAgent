@@ -17,8 +17,10 @@ const jsonValue: z.ZodType<unknown> = z.lazy(() => z.union([
 const snapshotDate = z.string().datetime({ offset: true });
 const snapshotOption = z.object({
   value: z.union([z.string(), z.number().finite(), z.boolean()]),
-  label: z.string().max(255).nullable(),
-}).strict();
+  label: z.string().max(255).nullable().optional(),
+  checked: z.boolean().optional(),
+  disabled: z.boolean().optional(),
+});
 const snapshotFieldValue = z.object({
   id: uuid,
   detectedFieldId: uuid,
@@ -100,7 +102,12 @@ export const browserDetectedFieldSchema = z.object({
   groupName: z.string().max(255).optional(),
   sectionName: z.string().max(255).optional(),
   detectionConfidence: z.number().min(0).max(1).optional(),
-  options: z.array(z.object({ value: z.union([z.string(), z.number(), z.boolean()]), label: z.string().max(255).optional() }).strict()).max(100).optional(),
+  options: z.array(z.object({
+    value: z.union([z.string(), z.number(), z.boolean()]),
+    label: z.string().max(255).optional(),
+    checked: z.boolean().optional(),
+    disabled: z.boolean().optional(),
+  })).max(100).optional(),
   fingerprint: z.string().trim().max(255).optional(),
 }).strict();
 

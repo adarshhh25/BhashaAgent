@@ -57,6 +57,8 @@ export function useVoiceState({
   });
 
   const isTransitioningRef = useRef(false);
+  const isCancelledRef = useRef(false);
+  const voiceGenerationIdRef = useRef(0);
   const sessionManagerRef = useRef<VoiceSessionManager | null>(null);
 
   // Initialize or get persistent session manager
@@ -72,18 +74,30 @@ export function useVoiceState({
         setTranscript(t);
       },
       onAssistantResponse: (data) => {
+        if (isCancelledRef.current || sessionManagerRef.current?.isSessionDestroyed) {
+          console.log('[useVoiceState] Response arrived after cancellation; suppressing browser execution');
+          return;
+        }
+
         setAssistantResponseText(data.response);
 
         // Execute browser actions in active Chrome tab if provided
         if (data.formActions && data.formActions.length > 0) {
           if (typeof chrome !== 'undefined' && chrome.tabs?.query) {
             chrome.tabs.query({ active: true, currentWindow: true }).then(async (tabs) => {
-              let tab = tabs[0];
-              if (!tab || !tab.url) {
+              if (isCancelledRef.current || sessionManagerRef.current?.isSessionDestroyed) return;
+              const isCandidateTab = (t: chrome.tabs.Tab) => t.id && t.url && !t.url.startsWith('chrome://') && !t.url.startsWith('chrome-extension://') && !t.url.startsWith('devtools://');
+              let tab = tabs.find(isCandidateTab);
+              if (!tab) {
                 const lastTabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-                tab = lastTabs[0];
+                tab = lastTabs.find(isCandidateTab);
               }
-              if (tab?.id && tab.url && !tab.url.startsWith('chrome://') && !tab.url.startsWith('chrome-extension://')) {
+              if (!tab) {
+                const allTabs = await chrome.tabs.query({ active: true });
+                tab = allTabs.find(isCandidateTab);
+              }
+              if (isCancelledRef.current || sessionManagerRef.current?.isSessionDestroyed) return;
+              if (tab?.id && tab.url) {
                 const actions = data.formActions!.map((fa, index) => ({
                   actionId: `voice-fill-${Date.now()}-${index}`,
                   fieldId: fa.fieldIdentifier || fa.fieldId || '',
@@ -92,42 +106,74 @@ export function useVoiceState({
                   actionType: fa.actionType,
                   value: fa.value,
                   expectedFieldType: '',
+                  originalInstruction: (fa as any).originalInstruction,
+                  requestedTarget: (fa as any).requestedTarget || fa.label || fa.fieldIdentifier,
+                  generationId: voiceGenerationIdRef.current,
                 }));
                 console.log('[useVoiceState] Executing form actions on active tab:', tab.id, actions);
                 const messagePayload = {
                   type: 'EXECUTE_FILL_INSTRUCTIONS',
-                  payload: { actions },
+                  payload: { actions, generationId: voiceGenerationIdRef.current },
                 };
 
                 let executedViaMessage = false;
-                try {
-                  const resp = await chrome.tabs.sendMessage(tab.id, messagePayload);
-                  if (resp && resp.success !== false) {
-                    executedViaMessage = true;
-                    console.log('[useVoiceState] Form actions execution result via sendMessage:', resp);
-                  }
-                } catch {
-                  // If receiving end does not exist, inject content script dynamically and retry
+
+                // Priority 1: Forward via background service worker
+                if (chrome.runtime?.sendMessage) {
                   try {
-                    if (chrome.scripting?.executeScript) {
-                      await chrome.scripting.executeScript({
-                        target: { tabId: tab.id },
-                        files: ['content.js'],
-                      });
-                      await new Promise((r) => setTimeout(r, 100));
-                      const retryResp = await chrome.tabs.sendMessage(tab.id, messagePayload);
-                      if (retryResp && retryResp.success !== false) {
-                        executedViaMessage = true;
-                        console.log('[useVoiceState] Retry after script injection result:', retryResp);
-                      }
+                    if (isCancelledRef.current || sessionManagerRef.current?.isSessionDestroyed) return;
+                    const fwdResp: any = await chrome.runtime.sendMessage({
+                      type: 'FORWARD_TO_CONTENT',
+                      targetTabId: tab.id,
+                      expectedUrl: tab.url,
+                      payload: {
+                        type: 'EXECUTE_FILL_INSTRUCTIONS',
+                        expectedUrl: tab.url,
+                        targetTabId: tab.id,
+                        payload: { actions, generationId: voiceGenerationIdRef.current },
+                      },
+                    });
+                    if (fwdResp && fwdResp.success !== false && fwdResp.data?.overallStatus !== 'FAILED') {
+                      executedViaMessage = true;
                     }
-                  } catch (injectErr) {
-                    console.warn('[useVoiceState] Failed relaying actions to content script:', injectErr);
+                  } catch {}
+                }
+
+                if (!executedViaMessage) {
+                  try {
+                    if (isCancelledRef.current || sessionManagerRef.current?.isSessionDestroyed) return;
+                    const resp = await chrome.tabs.sendMessage(tab.id, messagePayload);
+                    if (resp && resp.success !== false) {
+                      executedViaMessage = true;
+                      console.log('[useVoiceState] Form actions execution result via sendMessage:', resp);
+                    }
+                  } catch {
+                    // If receiving end does not exist, inject content script dynamically and retry
+                    try {
+                      if (isCancelledRef.current || sessionManagerRef.current?.isSessionDestroyed) return;
+                      if (chrome.scripting?.executeScript) {
+                        await chrome.scripting.executeScript({
+                          target: { tabId: tab.id },
+                          files: ['content.js'],
+                        });
+                        if (isCancelledRef.current || sessionManagerRef.current?.isSessionDestroyed) return;
+                        await new Promise((r) => setTimeout(r, 100));
+                        if (isCancelledRef.current || sessionManagerRef.current?.isSessionDestroyed) return;
+                        const retryResp = await chrome.tabs.sendMessage(tab.id, messagePayload);
+                        if (retryResp && retryResp.success !== false) {
+                          executedViaMessage = true;
+                          console.log('[useVoiceState] Retry after script injection result:', retryResp);
+                        }
+                      }
+                    } catch (injectErr) {
+                      console.warn('[useVoiceState] Failed relaying actions to content script:', injectErr);
+                    }
                   }
                 }
 
                 // Bulletproof direct DOM execution fallback: If content script message did not succeed, execute DOM actions directly via scripting API
                 if (!executedViaMessage && chrome.scripting?.executeScript) {
+                  if (isCancelledRef.current || sessionManagerRef.current?.isSessionDestroyed) return;
                   try {
                     console.log('[useVoiceState] Falling back to direct DOM scripting execution for actions:', actions);
                     await chrome.scripting.executeScript({
@@ -180,15 +226,37 @@ export function useVoiceState({
 
                           if (inputType === 'checkbox') {
                             const chk = el as HTMLInputElement;
-                            const desired = actType === 'CHECK' || (actType === 'SET_VALUE' && (val === true || val === 'true' || val === 1 || String(val).toLowerCase() === 'on'));
-                            if (chk.checked !== desired) {
-                              chk.click();
+                            const targetVal = String(val ?? '').trim().toLowerCase();
+                            if (chk.name && (Array.isArray(val) || (targetVal !== 'true' && targetVal !== 'false' && targetVal !== '1' && targetVal !== '0' && targetVal !== 'on' && targetVal !== ''))) {
+                              const desiredValues = Array.isArray(val)
+                                ? val.map((v) => String(v).trim().toLowerCase())
+                                : targetVal.split(/[,\s]+/).map((v) => v.trim().toLowerCase());
+
+                              const group = Array.from(document.querySelectorAll<HTMLInputElement>(`input[type="checkbox"][name="${chk.name}"]`));
+                              for (const box of group) {
+                                const boxVal = box.value.trim().toLowerCase();
+                                const boxLabel = (box.closest('label')?.textContent || '').trim().toLowerCase();
+                                const shouldBeChecked = desiredValues.some((dv) => dv === boxVal || dv === boxLabel || boxLabel.includes(dv));
+                                if (shouldBeChecked) {
+                                  if (!box.checked) {
+                                    if (typeof box.click === 'function') box.click();
+                                    if (!box.checked) box.checked = true;
+                                  }
+                                  box.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+                                  box.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+                                }
+                              }
+                            } else {
+                              const desired = actType === 'CHECK' || (actType === 'SET_VALUE' && (val === true || val === 'true' || val === 1 || String(val).toLowerCase() === 'on'));
+                              if (chk.checked !== desired) {
+                                chk.click();
+                              }
+                              if (chk.checked !== desired) {
+                                chk.checked = desired;
+                              }
+                              chk.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+                              chk.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
                             }
-                            if (chk.checked !== desired) {
-                              chk.checked = desired;
-                            }
-                            chk.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
-                            chk.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
                           } else if (inputType === 'radio') {
                             const rad = el as HTMLInputElement;
                             let targetRadio = rad;
@@ -317,6 +385,7 @@ export function useVoiceState({
    * Start listening: verifies permission and conversation validity, then initiates session.
    */
   const startListening = useCallback(async () => {
+    isCancelledRef.current = false;
     if (isTransitioningRef.current) return;
     isTransitioningRef.current = true;
     setErrorMessage(null);
@@ -391,21 +460,38 @@ export function useVoiceState({
   ]);
 
   /**
-   * Stop listening: moves to IDLE.
+   * Stop listening: moves to IDLE without aborting in-flight response.
    */
   const stopListening = useCallback(() => {
+    if (presentationState === 'PROCESSING') {
+      // Do not abort in-flight turn if user merely stops recording
+      sessionManagerRef.current?.stopAudioCapture();
+      return;
+    }
     sessionManagerRef.current?.stop();
     setPresentationState('IDLE');
-  }, []);
+  }, [presentationState]);
 
   /**
-   * Cancel active voice turn or playback.
+   * Cancel active voice turn or playback explicitly.
    */
   const cancelVoice = useCallback(() => {
+    isCancelledRef.current = true;
+    voiceGenerationIdRef.current++;
     sessionManagerRef.current?.cancel();
     setPresentationState('CANCELLING');
     setPlaybackState('STOPPED');
     setTranscript(null);
+
+    // Notify content script to reject any in-flight turns with stale generationId
+    if (typeof chrome !== 'undefined' && chrome.tabs?.query) {
+      chrome.tabs.query({ active: true, currentWindow: true }).then((tabs) => {
+        const tab = tabs[0];
+        if (tab?.id) {
+          chrome.tabs.sendMessage(tab.id, { type: 'CANCEL_FILL_EXECUTION' }).catch(() => {});
+        }
+      }).catch(() => {});
+    }
 
     setTimeout(() => {
       setPresentationState('IDLE');

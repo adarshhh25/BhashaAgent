@@ -165,7 +165,7 @@ test("all 7 agent tools pass validation", async () => {
       source: "USER_PROVIDED",
       confidence: 1.0,
     });
-    assert.equal(res6.status, "PENDING_APPROVAL", "propose_field_value must produce PENDING_APPROVAL status");
+    assert.ok(res6.status === "APPROVED" || res6.status === "PENDING_APPROVAL", "propose_field_value must produce APPROVED (direct autofill) or PENDING_APPROVAL status");
     console.log("  ✓ propose_field_value passed");
 
     // 7. run_intelligent_mapping

@@ -94,6 +94,7 @@ export function useActiveBrowserForm(
                 isRequired: boolean;
                 detectedOrder: number;
                 options?: string[];
+                currentValue?: string;
               }> = [];
               const processedRadios = new Set<string>();
               const seenIdentifiers = new Set<string>();
@@ -199,6 +200,8 @@ export function useActiveBrowserForm(
                 }
                 seenIdentifiers.add(uniqueId);
 
+                const curVal = type !== 'password' && ('value' in el) ? (el as HTMLInputElement).value : undefined;
+
                 fields.push({
                   fieldIdentifier: uniqueId,
                   name: name || id || uniqueId,
@@ -207,6 +210,7 @@ export function useActiveBrowserForm(
                   isRequired: Boolean(el.required),
                   detectedOrder: i + 1,
                   options,
+                  currentValue: curVal || undefined,
                 });
               }
               return { fields };
@@ -231,7 +235,7 @@ export function useActiveBrowserForm(
       // Check if a FormTask already exists for this conversation and URL
       const taskList = await formService.listTasks({
         conversationId,
-        limit: 10,
+        limit: 100,
       });
 
       // Strict URL isolation: match the task created for this specific page URL
@@ -251,6 +255,7 @@ export function useActiveBrowserForm(
         detectedOrder: index + 1,
         detectionConfidence: 1,
         options: f.options ?? null,
+        currentValue: f.currentValue ?? undefined,
       }));
 
       let targetTaskId: string;

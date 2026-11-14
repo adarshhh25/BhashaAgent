@@ -72,7 +72,7 @@ const HINGLISH_WORDS = new Set([
   "maza", "mazi", "maze", "mala", "ahe", "nav", "patta", "dya", "krun",
 ]);
 
-// Strong English function words
+// Strong English function words and common form concepts
 const ENGLISH_STRONG_WORDS = new Set([
   "the", "this", "that", "these", "those",
   "is", "are", "am", "was", "were", "be", "been", "being",
@@ -80,9 +80,11 @@ const ENGLISH_STRONG_WORDS = new Set([
   "do", "does", "did", "doing",
   "will", "would", "shall", "should", "can", "could", "may", "might", "must",
   "my", "your", "his", "her", "its", "our", "their",
-  "please", "fill", "select", "choose", "enter", "update", "change",
+  "please", "fill", "select", "choose", "enter", "update", "change", "add", "put", "set", "write", "type",
+  "in", "on", "at", "to", "for", "from", "with", "as", "by", "into",
   "what", "where", "when", "who", "which", "how", "why",
-  "help", "form", "field", "telephone", "phone", "number", "address", "email", "name",
+  "help", "form", "field", "telephone", "phone", "number", "address", "email", "name", "customer",
+  "yes", "no", "sure", "okay", "done", "large", "medium", "small", "time", "date", "delivery", "instructions",
 ]);
 
 /**

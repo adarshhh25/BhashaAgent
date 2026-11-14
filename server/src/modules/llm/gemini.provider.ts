@@ -4,7 +4,8 @@ import { LLMError } from "./llm.errors";
 import { HttpLLMProvider } from "./llm.provider";
 import type { LLMMessage, LLMProvider, LLMRequest, LLMResponse, LLMToolCall } from "./llm.types";
 import { detectConversationLanguage } from "../agent/language-detector";
-import { logLLMEvent } from "./llm-logger";
+import { logLLMEvent, logObservabilityEvent } from "./llm-logger";
+import { classifyLLMError, extractRetryDelayMs } from "./llm-error-classifier";
 
 interface GeminiFunctionDeclaration {
   name: string;
@@ -226,18 +227,34 @@ export class GeminiLLMProvider implements LLMProvider {
     const conversationId = request.conversationId;
     let totalAttempts = 0;
     const fallbackReasons: string[] = [];
+    const modelsAttempted: string[] = [];
+
+    if (request.signal?.aborted) {
+      throw new LLMError("REQUEST_CANCELLED", "Turn was cancelled before dispatch");
+    }
 
     for (let modelIdx = 0; modelIdx < modelsToTry.length; modelIdx += 1) {
       const currentModel = modelsToTry[modelIdx];
       const nextCandidate = modelsToTry[modelIdx + 1];
 
       for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+        if (request.signal?.aborted) {
+          throw new LLMError("REQUEST_CANCELLED", "Turn was cancelled by client");
+        }
+
         totalAttempts += 1;
+        if (!modelsAttempted.includes(currentModel)) {
+          modelsAttempted.push(currentModel);
+        }
         const isFallback = (currentModel !== primaryModel) || fallbackReasons.length > 0;
         const startTime = Date.now();
         const timeoutMs = request.timeoutMs ?? config.gemini.timeoutMs;
         const abortController = new AbortController();
         const timer = setTimeout(() => abortController.abort(), timeoutMs);
+        const onAbort = () => abortController.abort();
+        if (request.signal) {
+          request.signal.addEventListener("abort", onAbort, { once: true });
+        }
 
         if (isFallback) {
           logLLMEvent("Fallback attempt started", {
@@ -248,6 +265,16 @@ export class GeminiLLMProvider implements LLMProvider {
             attempt: totalAttempts,
             isFallback: true,
             reason: fallbackReasons[fallbackReasons.length - 1] || "MODEL_FALLBACK",
+          });
+          logObservabilityEvent("PROVIDER_FALLBACK_STARTED", {
+            requestId,
+            conversationId,
+            fromProvider: "gemini",
+            fromModel: primaryModel,
+            toProvider: "gemini",
+            toModel: currentModel,
+            reason: fallbackReasons[fallbackReasons.length - 1] || "MODEL_FALLBACK",
+            attempt: totalAttempts,
           });
         } else {
           logLLMEvent("Turn started", {
@@ -291,6 +318,9 @@ export class GeminiLLMProvider implements LLMProvider {
           });
 
           clearTimeout(timer);
+          if (request.signal) {
+            request.signal.removeEventListener("abort", onAbort);
+          }
           const durationMs = Date.now() - startTime;
 
           // Process tool calls if any from candidate parts (preserving thoughtSignature)
@@ -421,41 +451,35 @@ export class GeminiLLMProvider implements LLMProvider {
             attemptCount: totalAttempts,
             fallbackUsed: isFallback,
             fallbackReasons: Array.from(new Set(fallbackReasons)),
+            modelsAttempted,
             latencyMs: durationMs,
           };
         } catch (error: any) {
           clearTimeout(timer);
+          if (request.signal) {
+            request.signal.removeEventListener("abort", onAbort);
+          }
           lastError = error;
 
           const durationMs = Date.now() - startTime;
           const errMsg = String(error?.message ?? "");
-          const status = error?.status ?? (errMsg.includes("400") ? 400 : errMsg.includes("404") ? 404 : errMsg.includes("429") ? 429 : errMsg.includes("503") ? 503 : 500);
 
-          // Error classification
-          const isTimeout = error?.name === "AbortError" || errMsg.includes("aborted") || errMsg.includes("ETIMEDOUT");
-          const isAuthError = status === 401 || status === 403 || errMsg.includes("API_KEY_INVALID") || errMsg.includes("PERMISSION_DENIED");
-          const isRateLimit = status === 429 || errMsg.includes("429") || errMsg.includes("RESOURCE_EXHAUSTED") || errMsg.includes("Quota exceeded");
-          const isDailyQuota = isRateLimit && (errMsg.includes("per day") || errMsg.includes("PerDay") || errMsg.includes("limit: 20") || errMsg.includes("free_tier_requests"));
-          const isHighDemand = status === 503 || errMsg.includes("503") || errMsg.includes("high demand") || errMsg.includes("UNAVAILABLE");
-          const isNotFound = status === 404 || errMsg.includes("404") || errMsg.includes("not found") || errMsg.includes("no longer available");
-          const isInvalidArgument = status === 400 || errMsg.includes("400") || errMsg.includes("INVALID_ARGUMENT");
-
-          const reason = isDailyQuota
-            ? "QUOTA_EXCEEDED"
-            : isRateLimit
-            ? "RATE_LIMIT"
-            : isHighDemand
-            ? "MODEL_UNAVAILABLE"
-            : isNotFound
-            ? "MODEL_UNAVAILABLE"
-            : isInvalidArgument
-            ? "INVALID_ARGUMENT"
-            : isTimeout
-            ? "TIMEOUT"
-            : isAuthError
-            ? "AUTH_ERROR"
-            : "NETWORK_ERROR";
-
+          // Explicit cancellation check
+          const isCancelled = Boolean(request.signal?.aborted);
+          if (isCancelled) {
+            logLLMEvent("Model attempt cancelled", {
+              requestId,
+              conversationId,
+              provider: "gemini",
+              model: currentModel,
+              attempt: totalAttempts,
+              outcome: "cancelled",
+              latencyMs: durationMs,
+            });
+            throw new LLMError("REQUEST_CANCELLED", "Turn was cancelled by client");
+          }
+          const classified = classifyLLMError(error);
+          const reason = classified.category;
           fallbackReasons.push(reason);
 
           if (currentModel === primaryModel) {
@@ -482,35 +506,35 @@ export class GeminiLLMProvider implements LLMProvider {
             });
           }
 
-          console.warn(`[GeminiLLMProvider] Error encountered: model=${currentModel}, attempt=${attempt + 1}, status=${status}, durationMs=${durationMs}, category=${reason}`);
+          console.warn(`[GeminiLLMProvider] Error encountered: model=${currentModel}, attempt=${attempt + 1}, status=${classified.statusCode}, durationMs=${durationMs}, category=${reason}`);
 
           // 1. Permanent Authentication Failure: do not retry or fallback endlessly
-          if (isAuthError) {
+          if (classified.category === "AUTHENTICATION_ERROR" || classified.category === "PERMISSION_DENIED") {
             throw new LLMError("PROVIDER_UNAVAILABLE", "Gemini API key is invalid or unauthorized");
           }
 
           // 2. Daily Quota Exceeded: mark model exhausted for 30 minutes, immediately fallback
-          if (isDailyQuota) {
+          if (classified.category === "QUOTA_EXCEEDED") {
             quotaExhaustedModels.set(currentModel, Date.now() + 30 * 60 * 1000);
             console.warn(`[GeminiLLMProvider] Daily quota exceeded on ${currentModel}. Immediately falling back to next model (${nextCandidate || 'none'})...`);
             break;
           }
 
           // 3. High Demand (503): immediately fallback to next eligible model if one exists
-          if (isHighDemand && nextCandidate) {
+          if (classified.category === "TRANSIENT_FAILURE" && classified.statusCode === 503 && errMsg.includes("high demand") && nextCandidate) {
             console.warn(`[GeminiLLMProvider] High demand (503) on ${currentModel}. Falling back to next model (${nextCandidate})...`);
             break;
           }
 
-          // 4. Model Deprecated / Not Found (404): permanently mark unavailable and fallback immediately
-          if (isNotFound) {
+          // 4. Model Deprecated / Not Found (404/INVALID_MODEL): permanently mark unavailable and fallback immediately
+          if (classified.category === "INVALID_MODEL") {
             permanentlyUnavailableModels.add(currentModel);
             console.warn(`[GeminiLLMProvider] Model ${currentModel} is unavailable/deprecated (404). Falling back to next model (${nextCandidate || 'none'})...`);
             break;
           }
 
           // 5. Invalid Argument (400):
-          if (isInvalidArgument) {
+          if (classified.category === "INVALID_ARGUMENT") {
             // If thinkingConfig was enabled on this attempt, retry immediately once without thinkingConfig
             if (isThinkingSupported(currentModel)) {
               console.warn(`[GeminiLLMProvider] Model ${currentModel} returned 400 with thinkingConfig. Retrying immediately without thinkingConfig...`);
@@ -524,7 +548,7 @@ export class GeminiLLMProvider implements LLMProvider {
           }
 
           // 6. Timeout: bounded retry, then fallback
-          if (isTimeout) {
+          if (classified.category === "TIMEOUT") {
             if (attempt < maxRetries) {
               console.warn(`[GeminiLLMProvider] Request timeout on ${currentModel}. Retrying (attempt ${attempt + 1}/${maxRetries})...`);
               continue;
@@ -536,17 +560,22 @@ export class GeminiLLMProvider implements LLMProvider {
             throw new LLMError("TIMEOUT", `Gemini request timed out on model ${currentModel}`);
           }
 
-          // 7. Rate Limit (transient 429): exponential backoff with jitter
-          if (isRateLimit) {
-            if (attempt < maxRetries) {
-              const backoff = Math.min(1500 * Math.pow(2, attempt) + Math.random() * 500, 10000);
-              console.warn(`[GeminiLLMProvider] Rate limit (429) on ${currentModel}. Retrying in ${Math.round(backoff)}ms (attempt ${attempt + 1}/${maxRetries})...`);
-              await new Promise((resolve) => setTimeout(resolve, backoff));
+          // 7. Rate Limit (429 with retry delay): respect Retry-After header or delay
+          if (classified.category === "RATE_LIMITED") {
+            const delay = classified.retryDelayMs !== undefined ? classified.retryDelayMs : Math.min(1500 * Math.pow(2, attempt) + Math.random() * 500, 10000);
+            if (delay <= 3000 && attempt < maxRetries) {
+              console.warn(`[GeminiLLMProvider] Short rate limit (${delay}ms) on ${currentModel}. Retrying in ${delay}ms (attempt ${attempt + 1}/${maxRetries})...`);
+              await new Promise((resolve) => setTimeout(resolve, delay));
               continue;
             }
             if (nextCandidate) {
-              console.warn(`[GeminiLLMProvider] Retries exhausted for rate limit on ${currentModel}. Falling back to next model (${nextCandidate})...`);
+              console.warn(`[GeminiLLMProvider] Rate limit delay ${delay}ms on ${currentModel}. Falling back to next model (${nextCandidate})...`);
               break;
+            }
+            if (attempt < maxRetries) {
+              console.warn(`[GeminiLLMProvider] Rate limit (429) on ${currentModel}. Retrying in ${delay}ms...`);
+              await new Promise((resolve) => setTimeout(resolve, delay));
+              continue;
             }
             throw new LLMError("RATE_LIMITED", "Gemini API rate limit exceeded");
           }
@@ -567,6 +596,9 @@ export class GeminiLLMProvider implements LLMProvider {
 
     // Secondary fallback to Groq if configured
     if (config.llm.apiKey && config.llm.baseUrl && config.llm.model) {
+      if (request.signal?.aborted) {
+        throw new LLMError("REQUEST_CANCELLED", "Turn was cancelled by client before Groq fallback");
+      }
       try {
         logLLMEvent("Fallback attempt started", {
           requestId,
@@ -577,6 +609,16 @@ export class GeminiLLMProvider implements LLMProvider {
           isFallback: true,
           reason: "ALL_GEMINI_EXHAUSTED",
         });
+        logObservabilityEvent("PROVIDER_FALLBACK_STARTED", {
+          requestId,
+          conversationId,
+          fromProvider: "gemini",
+          fromModel: primaryModel,
+          toProvider: "groq",
+          toModel: config.llm.model,
+          reason: "ALL_GEMINI_EXHAUSTED",
+          attempt: totalAttempts + 1,
+        });
         console.warn(`[GeminiLLMProvider] All Gemini models exhausted or unavailable. Seamlessly delegating to Groq fallback...`);
         const groq = new HttpLLMProvider();
         const groqRes = await groq.generateResponse({
@@ -586,9 +628,12 @@ export class GeminiLLMProvider implements LLMProvider {
         });
         return {
           ...groqRes,
+          provider: "groq",
+          model: groqRes.model || config.llm.model,
           attemptCount: totalAttempts + (groqRes.attemptCount || 1),
           fallbackUsed: true,
           fallbackReasons: Array.from(new Set([...fallbackReasons, "MODEL_UNAVAILABLE"])),
+          modelsAttempted: Array.from(new Set([...modelsAttempted, config.llm.model])),
         };
       } catch (groqErr) {
         logLLMEvent("Model attempt failed", {
@@ -605,9 +650,14 @@ export class GeminiLLMProvider implements LLMProvider {
     }
 
     if (lastError instanceof LLMError) {
+      (lastError as any).modelsAttempted = modelsAttempted;
+      (lastError as any).attemptCount = totalAttempts;
       throw lastError;
     }
-    throw new LLMError("PROVIDER_UNAVAILABLE", `Gemini request failed: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
+    const finalErr = new LLMError("PROVIDER_UNAVAILABLE", `Gemini request failed: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
+    (finalErr as any).modelsAttempted = modelsAttempted;
+    (finalErr as any).attemptCount = totalAttempts;
+    throw finalErr;
   }
 
   async healthCheck(): Promise<{ available: boolean; provider: string }> {

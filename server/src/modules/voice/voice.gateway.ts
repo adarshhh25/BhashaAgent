@@ -22,6 +22,7 @@ export type VoiceTranscriptHandler = (input: {
   content: string;
   language?: string;
   formTaskId?: string;
+  signal?: AbortSignal;
 }) => Promise<{ response: string; assistantMessageId: string; reused: boolean; language?: string; formActions?: unknown }>;
 
 export function clearActiveVoiceSessions(): void {
@@ -129,6 +130,7 @@ export function attachVoiceGateway(
     const tts = ttsFactory();
     let ttsBusy = false;
     const seenSegments = new Set<string>();
+    const activeTurnControllers = new Map<string, AbortController>();
 
     registry.attachResources(voiceSessionId, socket, provider, tts);
 
@@ -137,6 +139,11 @@ export function attachVoiceGateway(
     const cleanup = (reason: string = "CONNECTION_CLEANUP") => {
       if (closed) return;
       closed = true;
+      for (const [segId, controller] of activeTurnControllers) {
+        console.log(`[VoiceGateway][${voiceSessionId}] Aborting turn segmentId=${segId} due to ${reason}`);
+        controller.abort();
+      }
+      activeTurnControllers.clear();
       registry.releaseSession(voiceSessionId, reason);
       console.log(`[VoiceGateway][${voiceSessionId}] Voice session cleaned up, totalAudioFrames=${audioFrameCount}`);
     };
@@ -186,6 +193,10 @@ export function attachVoiceGateway(
           const turnLangCtx = resolveVoiceTurnLanguage(cleanTranscriptText, session.language, event.detectedLanguageCode);
           logVoiceTurnLanguage(turnLangCtx);
           console.log(`[VoiceGateway][${voiceSessionId}] Turn language resolved: text="${cleanTranscriptText.slice(0, 40)}", preferredLang=${session.language || 'none'}, providerLang=${event.detectedLanguageCode || 'auto'}, detectedTurnLang=${turnLangCtx.detectedLanguage}, effectiveLang=${turnLangCtx.effectiveLanguage}, formTaskId=${activeFormTaskId ?? 'none'}`);
+
+          const turnAbortController = new AbortController();
+          activeTurnControllers.set(event.segmentId, turnAbortController);
+
           void transcriptHandler({
             userId: session.userId,
             conversationId: session.conversationId,
@@ -194,8 +205,9 @@ export function attachVoiceGateway(
             content: cleanTranscriptText,
             language: turnLangCtx.effectiveLanguage,
             formTaskId: activeFormTaskId,
+            signal: turnAbortController.signal,
           }).then((result) => {
-            if (!closed) {
+            if (!closed && !turnAbortController.signal.aborted) {
               const actionsCount = Array.isArray((result as any).formActions) ? (result as any).formActions.length : 0;
               const responseLang = turnLangCtx.responseLanguage;
               const cleanResponse = sanitizeResponseText(result.response, responseLang);
@@ -212,19 +224,25 @@ export function attachVoiceGateway(
                 ttsBusy = true;
                 void tts.synthesize(cleanResponse, turnLangCtx.ttsLanguageCode).catch((error: unknown) => {
                   ttsBusy = false;
-                  if (!closed) send(socket, "ERROR", { error: { code: error instanceof HttpError ? error.code : "TTS_FAILED", message: error instanceof HttpError ? error.message : "Text-to-speech failed" } });
+                  if (!closed && !turnAbortController.signal.aborted) send(socket, "ERROR", { error: { code: error instanceof HttpError ? error.code : "TTS_FAILED", message: error instanceof HttpError ? error.message : "Text-to-speech failed" } });
                 });
               } else {
                 send(socket, "ERROR", { error: { code: "TTS_BUSY", message: "Audio synthesis is already in progress" } });
               }
             }
           }).catch((error: unknown) => {
+            if (turnAbortController.signal.aborted || (error instanceof HttpError && error.code === "REQUEST_CANCELLED")) {
+              console.log(`[VoiceGateway][${voiceSessionId}] Turn cancelled cleanly for segmentId=${event.segmentId}`);
+              return;
+            }
             console.error(`[VoiceGateway][${voiceSessionId}] Voice turn failed:`, error);
             if (!closed) {
               const code = error instanceof HttpError ? error.code : "VOICE_TURN_FAILED";
               const message = error instanceof HttpError ? error.message : "Voice turn failed";
               send(socket, "ERROR", { error: { code, message } });
             }
+          }).finally(() => {
+            activeTurnControllers.delete(event.segmentId);
           });
         }
       } else if (event.type === "error") {

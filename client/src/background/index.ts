@@ -56,16 +56,34 @@ export async function getActiveTab(): Promise<ActiveTabContext | null> {
     return null;
   }
 
-  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-  const activeTab = tabs[0];
-  if (!activeTab || !activeTab.id || !activeTab.url) {
+  const isCandidate = (t: chrome.tabs.Tab) =>
+    Boolean(t.id && t.url && !t.url.startsWith('chrome://') && !t.url.startsWith('chrome-extension://') && !t.url.startsWith('devtools://') && !t.url.startsWith('edge://'));
+
+  let tab: chrome.tabs.Tab | undefined;
+  try {
+    const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    tab = tabs.find(isCandidate);
+  } catch {}
+  if (!tab) {
+    try {
+      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+      tab = tabs.find(isCandidate);
+    } catch {}
+  }
+  if (!tab) {
+    try {
+      const all = await chrome.tabs.query({ active: true });
+      tab = all.find(isCandidate);
+    } catch {}
+  }
+  if (!tab || !tab.id || !tab.url) {
     return null;
   }
 
   return {
-    tabId: activeTab.id,
-    url: activeTab.url,
-    title: activeTab.title || '',
+    tabId: tab.id,
+    url: tab.url,
+    title: tab.title || '',
   };
 }
 
@@ -113,7 +131,19 @@ if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
 
     if (message?.type === 'FORWARD_TO_CONTENT') {
       void (async () => {
-        const tab = await getActiveTab();
+        const explicitTabId = message.targetTabId || message.payload?.targetTabId;
+        let tab: ActiveTabContext | null = null;
+        if (typeof explicitTabId === 'number' && chrome.tabs?.get) {
+          try {
+            const rawTab = await chrome.tabs.get(explicitTabId);
+            if (rawTab && rawTab.id && rawTab.url) {
+              tab = { tabId: rawTab.id, url: rawTab.url, title: rawTab.title || '' };
+            }
+          } catch {}
+        }
+        if (!tab) {
+          tab = await getActiveTab();
+        }
         if (!tab) {
           sendResponse({ success: false, error: 'No active tab found' });
           return;

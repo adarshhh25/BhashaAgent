@@ -5,6 +5,15 @@ import { getTask, listTasks, setFieldValue } from "../form-tasks/form-task.servi
 import { runIntelligentMapping } from "../form-intelligence/form-intelligence.service";
 import { conceptForText } from "../form-intelligence/field-matcher.service";
 import { matchOption, type FormOption } from "../form-intelligence/option-matcher.service";
+import { isSensitiveField, isFieldTypeCompatible } from "../form-intelligence/field-type-validator.service";
+import { isInstructionFragment } from "../form-intelligence/form-action-router";
+import { validateTargetFieldAgainstInstruction } from "../form-intelligence/target-field-validator";
+import {
+  devanagariToLatin,
+  latinToDevanagari,
+  cleanNameValue,
+} from "../form-intelligence/script-converter.service";
+import { extractSpokenEmail } from "../form-intelligence/spoken-email-normalizer";
 import type { AgentContext } from "../context/context.types";
 import type { LLMToolDefinition } from "../llm/llm.types";
 
@@ -57,26 +66,63 @@ const proposalTool: AgentTool = {
   },
 };
 
+const NON_PERSON_FIELD_REGEX = /\b(university|college|institution|company|employer|organization|file|document|attachment|pdf|photo|image|filename)\b/i;
+
 function findTargetField(
   targetIdOrName: string,
   fields: AgentContext["formTask"]["detectedFields"],
+  valueToFill?: unknown,
 ) {
   const search = targetIdOrName.toLowerCase().trim();
-  // 1. Direct match on id, identifier, name, or label
-  const direct = fields.find((candidate) =>
-    candidate.id === targetIdOrName ||
-    (candidate.fieldIdentifier && candidate.fieldIdentifier.toLowerCase() === search) ||
-    (candidate.name && candidate.name.toLowerCase() === search) ||
-    (candidate.label && candidate.label.toLowerCase() === search) ||
-    (candidate.label && candidate.label.toLowerCase().includes(search)) ||
-    (candidate.label && search.includes(candidate.label.toLowerCase()))
-  );
-  if (direct) return direct;
-
-  // 2. Multilingual semantic concept matching (e.g. "दूरभाष" / "फोन" -> "Telephone Number")
   const searchConcept = conceptForText(targetIdOrName);
+  const isPersonNameSearch =
+    searchConcept === "full_name" ||
+    searchConcept === "first_name" ||
+    searchConcept === "last_name" ||
+    /\b(customer\s*name|client\s*name|user\s*name|your\s*name|my\s*name|naam|नाव|नाम)\b/i.test(search);
+
+  // Filter candidates by type compatibility if valueToFill is provided
+  const candidatePool = fields.filter((c) => {
+    // A file input should never match unless explicitly requested as file/upload/attachment
+    if (c.inputType?.toLowerCase() === "file" && !/\b(file|upload|attach|attachment|document)\b/i.test(search)) {
+      return false;
+    }
+    // Person name searches should never match non-person entity fields
+    if (isPersonNameSearch) {
+      const cLabel = (c.label || "").toLowerCase();
+      const cName = (c.name || "").toLowerCase();
+      const cIdent = (c.fieldIdentifier || "").toLowerCase();
+      if (NON_PERSON_FIELD_REGEX.test(cLabel) || NON_PERSON_FIELD_REGEX.test(cName) || NON_PERSON_FIELD_REGEX.test(cIdent)) {
+        return false;
+      }
+    }
+    // Check type compatibility
+    if (valueToFill !== undefined) {
+      const compat = isFieldTypeCompatible(c, valueToFill);
+      if (!compat.compatible) return false;
+    }
+    return true;
+  });
+
+  // 1. Exact ID or fieldIdentifier match
+  const exact = candidatePool.find(
+    (candidate) =>
+      candidate.id === targetIdOrName ||
+      (candidate.fieldIdentifier && candidate.fieldIdentifier.toLowerCase() === search),
+  );
+  if (exact) return exact;
+
+  // 2. Exact name or label match
+  const exactNameOrLabel = candidatePool.find(
+    (candidate) =>
+      (candidate.name && candidate.name.toLowerCase() === search) ||
+      (candidate.label && candidate.label.toLowerCase() === search),
+  );
+  if (exactNameOrLabel) return exactNameOrLabel;
+
+  // 3. Multilingual semantic concept matching
   if (searchConcept) {
-    const conceptMatch = fields.find((candidate) => {
+    const conceptMatch = candidatePool.find((candidate) => {
       const candidateConcept =
         conceptForText(candidate.label || "") ||
         conceptForText(candidate.name || "") ||
@@ -85,6 +131,14 @@ function findTargetField(
     });
     if (conceptMatch) return conceptMatch;
   }
+
+  // 4. Substring label match
+  const subMatch = candidatePool.find(
+    (candidate) =>
+      (candidate.label && candidate.label.toLowerCase().includes(search)) ||
+      (candidate.label && search.includes(candidate.label.toLowerCase())),
+  );
+  if (subMatch) return subMatch;
 
   return undefined;
 }
@@ -130,6 +184,51 @@ export function isValueGroundedInUserUtterance(
   const tokens = valStr.split(/[\s,]+/).filter((t) => t.length >= 2);
   if (tokens.length > 0 && tokens.every((t) => userMsg.includes(t))) return true;
 
+  // 3b. Transliteration grounding: check if valStr is transliterated from Devanagari/Latin in userMsg
+  const userMsgClean = cleanNameValue(userMsg);
+  const userMsgLatin = devanagariToLatin(userMsgClean).toLowerCase();
+  if (userMsgLatin.includes(valStr) || (tokens.length > 0 && tokens.every((t) => userMsgLatin.includes(t)))) {
+    return true;
+  }
+  const userMsgDeva = latinToDevanagari(userMsgClean).toLowerCase();
+  if (userMsgDeva.includes(valStr)) {
+    return true;
+  }
+
+  // 3c. Email grounding: check if valStr is a normalized spoken email from userMsg or past messages
+  const isEmailField = (field.inputType || "").toLowerCase() === "email" || conceptForText(`${field.label} ${field.fieldIdentifier}`) === "email";
+  if (isEmailField || valStr.includes("@")) {
+    const spokenEmail = extractSpokenEmail(userMsg);
+    if (spokenEmail && spokenEmail.toLowerCase() === valStr) {
+      return true;
+    }
+    const cleanValEmail = valStr.replace(/[\s@._-]+/g, "");
+    if (cleanValEmail.length >= 4) {
+      const cleanUserLatin = userMsgLatin.replace(/[\s@._-]+/g, "");
+      const cleanUserMsg = userMsg.replace(/[\s@._-]+/g, "");
+      if (cleanUserLatin.includes(cleanValEmail) || cleanUserMsg.includes(cleanValEmail)) {
+        return true;
+      }
+    }
+  }
+
+  // 3c. Check against field's collectedValue or currentValue (for script conversions or existing field updates)
+  const existingVal = String(field.collectedValue || (field as any).currentValue || "");
+  if (existingVal) {
+    const cleanExisting = cleanNameValue(existingVal).toLowerCase();
+    const existingLatin = devanagariToLatin(cleanExisting).toLowerCase();
+    const existingDeva = latinToDevanagari(cleanExisting).toLowerCase();
+    if (
+      existingLatin === valStr ||
+      existingDeva === valStr ||
+      valStr.includes(existingLatin) ||
+      existingLatin.includes(valStr) ||
+      (tokens.length > 0 && tokens.every((t) => existingLatin.includes(t)))
+    ) {
+      return true;
+    }
+  }
+
   // 4. Number/digit matching for phone/numeric fields
   const digits = valStr.replace(/\D/g, "");
   if (digits.length >= 4 && userMsg.replace(/\D/g, "").includes(digits)) return true;
@@ -142,6 +241,10 @@ export function isValueGroundedInUserUtterance(
       if (pastContent.includes(valStr)) return true;
       if (tokens.length > 0 && tokens.every((t) => pastContent.includes(t))) return true;
       if (digits.length >= 4 && pastContent.replace(/\D/g, "").includes(digits)) return true;
+      if (isEmailField || valStr.includes("@")) {
+        const pastEmail = extractSpokenEmail(pastContent);
+        if (pastEmail && pastEmail.toLowerCase() === valStr) return true;
+      }
     }
   }
 
@@ -203,13 +306,48 @@ const fieldValueTool: AgentTool = {
 
     if (context.formTask.id !== input.taskId) throw new Error("Field task is not the selected task");
 
+    const currentUserInstruction = context.request?.currentUserMessage?.content || "";
+
     // Handle batch proposals
     if (input.proposals && input.proposals.length > 0) {
       const results = [];
       for (const proposal of input.proposals) {
-        const field = findTargetField(proposal.fieldId, context.formTask.detectedFields);
+        const field = findTargetField(proposal.fieldId, context.formTask.detectedFields, proposal.value);
         if (!field) continue;
+        if (isSensitiveField(field)) {
+          console.warn(`[AgentTools] ProposeFieldValue: Skipping sensitive field "${field.label || field.id}"`);
+          continue;
+        }
+
+        // Validate target field against user instruction
+        const targetValidation = validateTargetFieldAgainstInstruction({
+          originalInstruction: currentUserInstruction,
+          requestedTarget: proposal.fieldId,
+          candidateField: field,
+          candidatePool: context.formTask?.detectedFields,
+          value: proposal.value,
+          formTaskId: input.taskId,
+          expectedTaskId: context.formTask?.id,
+          conversationId: context.conversation?.id,
+          expectedConversationId: context.conversation?.id,
+        });
+        if (!targetValidation.valid) {
+          console.warn(`[AgentTools] ProposeFieldValue: Target rejected for field "${field.label || field.id}": ${targetValidation.reason}`);
+          continue;
+        }
+
+        const compat = isFieldTypeCompatible(field, proposal.value);
+        if (!compat.compatible) {
+          console.warn(`[AgentTools] ProposeFieldValue: Skipping incompatible field "${field.label || field.id}" (${field.inputType}): ${compat.reason}`);
+          continue;
+        }
+
         const resolvedValue = resolveMultilingualFieldValue(field, proposal.value);
+
+        if (isInstructionFragment(resolvedValue)) {
+          console.warn(`[AgentTools] ProposeFieldValue: Skipping instruction fragment value for field "${field.label || field.id}": "${resolvedValue}"`);
+          continue;
+        }
 
         // Verify information provenance: value must be grounded in user conversation
         if (!isValueGroundedInUserUtterance(field, resolvedValue, context)) {
@@ -241,9 +379,83 @@ const fieldValueTool: AgentTool = {
       throw new Error("Either proposals or fieldId, value, and source are required");
     }
 
-    const field = findTargetField(input.fieldId, context.formTask.detectedFields);
+    const field = findTargetField(input.fieldId, context.formTask.detectedFields, input.value);
     if (!field) throw new Error("Field is not part of the selected task");
+
+    if (isSensitiveField(field)) {
+      return {
+        id: "rejected_sensitive",
+        fieldId: field.id,
+        fieldIdentifier: field.fieldIdentifier,
+        label: field.label,
+        inputType: field.inputType,
+        value: input.value,
+        status: "REJECTED_SENSITIVE",
+        message: "Protected sensitive fields (passwords, payment cards, CVV, authentication tokens, and government IDs) cannot be filled via assistant.",
+        redacted: true,
+      };
+    }
+
+    // Validate target field against user instruction
+    const targetValidation = validateTargetFieldAgainstInstruction({
+      originalInstruction: currentUserInstruction,
+      requestedTarget: input.fieldId,
+      candidateField: field,
+      candidatePool: context.formTask?.detectedFields,
+      value: input.value,
+      formTaskId: input.taskId,
+      expectedTaskId: context.formTask?.id,
+      conversationId: context.conversation?.id,
+      expectedConversationId: context.conversation?.id,
+    });
+    if (!targetValidation.valid) {
+      console.warn(`[AgentTools] ProposeFieldValue: Target rejected for field "${field.label || field.id}": ${targetValidation.reason}`);
+      return {
+        id: "rejected_target_mismatch",
+        fieldId: field.id,
+        fieldIdentifier: field.fieldIdentifier,
+        label: field.label,
+        inputType: field.inputType,
+        value: input.value,
+        status: "REJECTED_TARGET_MISMATCH",
+        errorCode: targetValidation.errorCode || "TARGET_FIELD_MISMATCH",
+        message: targetValidation.reason,
+        clarificationNeeded: targetValidation.clarificationNeeded,
+        redacted: field.inputType.toLowerCase() === "password",
+      };
+    }
+
+    const compat = isFieldTypeCompatible(field, input.value);
+    if (!compat.compatible) {
+      return {
+        id: "rejected_incompatible",
+        fieldId: field.id,
+        fieldIdentifier: field.fieldIdentifier,
+        label: field.label,
+        inputType: field.inputType,
+        value: input.value,
+        status: "REJECTED_INCOMPATIBLE_TYPE",
+        errorCode: compat.errorCode,
+        message: compat.reason,
+      };
+    }
+
     const resolvedValue = resolveMultilingualFieldValue(field, input.value);
+
+    if (isInstructionFragment(resolvedValue)) {
+      console.warn(`[AgentTools] ProposeFieldValue: Rejecting instruction fragment value for field "${field.label || field.id}": "${resolvedValue}"`);
+      return {
+        id: "rejected_fragment",
+        fieldId: field.id,
+        fieldIdentifier: field.fieldIdentifier,
+        label: field.label,
+        inputType: field.inputType,
+        value: resolvedValue,
+        status: "REJECTED_INVALID_VALUE",
+        message: "Instruction text or command fragment cannot be proposed as a field value.",
+        redacted: field.inputType.toLowerCase() === "password",
+      };
+    }
 
     // Verify information provenance: value must be grounded in user conversation
     if (!isValueGroundedInUserUtterance(field, resolvedValue, context)) {

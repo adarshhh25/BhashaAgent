@@ -63,6 +63,7 @@ export interface ContextDetectedField {
   isEmpty?: boolean;
   isCollected?: boolean;
   collectedValue?: unknown;
+  currentValue?: unknown;
   provenance?: string;
   isApproved?: boolean;
   isApplied?: boolean;

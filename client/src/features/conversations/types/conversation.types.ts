@@ -86,6 +86,14 @@ export interface AgentTurnRequest {
   formTaskId?: string;
 }
 
+export interface FormBrowserAction {
+  actionType: 'SET_VALUE' | 'SELECT_OPTION' | 'CHECK' | 'UNCHECK';
+  fieldIdentifier: string;
+  fieldId?: string;
+  value: string | number | boolean | Array<string | number | boolean>;
+  label?: string;
+}
+
 export interface AgentTurnResponseData {
   response: string;
   assistantMessageId: string;
@@ -99,12 +107,17 @@ export interface AgentTurnResponseData {
     reason?: string;
   };
   context?: unknown;
+  language?: {
+    detected: string;
+    responseLanguage: string;
+  };
   toolResults?: Array<{
     toolCallId: string;
     name: string;
     success: boolean;
     data?: unknown;
   }>;
+  formActions?: FormBrowserAction[];
 }
 
 export type SupportedLanguage = 'en' | 'hi' | 'mr' | 'hinglish';

@@ -35,13 +35,11 @@ export default defineConfig({
         permission: resolve(import.meta.dirname, 'permission.html'),
         // Background Service Worker
         background: resolve(import.meta.dirname, 'src/background/index.ts'),
-        // Webpage Content Script
-        content: resolve(import.meta.dirname, 'src/content/index.ts'),
       },
       output: {
-        // Stable output paths: background.js & content.js at root of dist/
+        // Stable output path: background.js at root of dist/
         entryFileNames: (chunkInfo) => {
-          if (chunkInfo.name === 'background' || chunkInfo.name === 'content') {
+          if (chunkInfo.name === 'background') {
             return '[name].js';
           }
           return 'assets/[name]-[hash].js';

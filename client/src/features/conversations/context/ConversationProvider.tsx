@@ -59,6 +59,8 @@ export function ConversationProvider({ children }: ConversationProviderProps) {
 
   // Reference for request cancellation on conversation switch
   const activeAbortControllerRef = useRef<AbortController | null>(null);
+  // Per-turn generation ID for cancellation propagation to content script
+  const chatGenerationIdRef = useRef(0);
 
   /**
    * Refresh conversation list
@@ -250,6 +252,16 @@ export function ConversationProvider({ children }: ConversationProviderProps) {
    */
   const selectConversation = useCallback(
     async (id: string | null) => {
+      // Cancel any in-flight form fills for the previous conversation
+      chatGenerationIdRef.current++;
+      if (typeof chrome !== 'undefined' && chrome.tabs?.query) {
+        chrome.tabs.query({ active: true, currentWindow: true }).then((tabs) => {
+          const tab = tabs[0];
+          if (tab?.id) {
+            chrome.tabs.sendMessage(tab.id, { type: 'CANCEL_FILL_EXECUTION' }).catch(() => {});
+          }
+        }).catch(() => {});
+      }
       setActiveConversationId(id);
       setTurnError(null);
       if (id) {
@@ -369,6 +381,233 @@ export function ConversationProvider({ children }: ConversationProviderProps) {
         };
 
         setMessages((prev) => [...prev, assistantMsg]);
+
+        // Direct in-page autofill execution without mandatory approval modal
+        if (turnResult.formActions && turnResult.formActions.length > 0) {
+          if (typeof chrome !== 'undefined' && chrome.tabs?.query) {
+            void (async () => {
+              let tab: chrome.tabs.Tab | undefined;
+              try {
+                const lastTabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+                tab = lastTabs.find((t) => t.id && t.url && !t.url.startsWith('chrome://') && !t.url.startsWith('chrome-extension://'));
+              } catch {}
+              if (!tab) {
+                try {
+                  const currTabs = await chrome.tabs.query({ active: true, currentWindow: true });
+                  tab = currTabs.find((t) => t.id && t.url && !t.url.startsWith('chrome://') && !t.url.startsWith('chrome-extension://'));
+                } catch {}
+              }
+              if (!tab) {
+                try {
+                  const allTabs = await chrome.tabs.query({ active: true });
+                  tab = allTabs.find((t) => t.id && t.url && !t.url.startsWith('chrome://') && !t.url.startsWith('chrome-extension://'));
+                } catch {}
+              }
+
+              if (tab?.id && tab.url) {
+                const currentGenId = Date.now();
+                chatGenerationIdRef.current = currentGenId;
+                const actions = turnResult.formActions!.map((fa, index) => ({
+                  actionId: `chat-fill-${currentGenId}-${index}`,
+                  fieldId: fa.fieldIdentifier || fa.fieldId || '',
+                  fieldIdentifier: fa.fieldIdentifier || fa.fieldId || '',
+                  action: fa.actionType,
+                  actionType: fa.actionType,
+                  value: fa.value,
+                  expectedFieldType: '',
+                  originalInstruction: (fa as any).originalInstruction || trimmed,
+                  requestedTarget: (fa as any).requestedTarget || fa.label || fa.fieldIdentifier,
+                  generationId: currentGenId,
+                }));
+
+                let isSuccess = false;
+
+                // Priority 1: Forward through background script (ensures content script injection & connection readiness)
+                if (chrome.runtime?.sendMessage) {
+                  try {
+                    const forwardResp: any = await chrome.runtime.sendMessage({
+                      type: 'FORWARD_TO_CONTENT',
+                      targetTabId: tab.id,
+                      payload: {
+                        type: 'EXECUTE_FILL_INSTRUCTIONS',
+                        expectedUrl: tab.url,
+                        targetTabId: tab.id,
+                        payload: { actions, generationId: currentGenId },
+                      },
+                    });
+                    if (forwardResp?.success && forwardResp.data?.overallStatus !== 'FAILED') {
+                      isSuccess = true;
+                    }
+                  } catch {
+                    // Forward message failed, proceed to direct tab messaging
+                  }
+                }
+
+                // Priority 2: Direct tab sendMessage
+                if (!isSuccess) {
+                  try {
+                    const execResp: any = await chrome.tabs.sendMessage(tab.id, {
+                      type: 'EXECUTE_FILL_INSTRUCTIONS',
+                      payload: { actions, generationId: currentGenId },
+                    });
+                    if (execResp && execResp.success !== false && execResp.data?.overallStatus !== 'FAILED') {
+                      isSuccess = true;
+                    }
+                  } catch {
+                    // Message delivery failed, will attempt direct DOM execution below
+                  }
+                }
+
+                // If content script messaging was unsuccessful, execute DOM mutation directly via scripting API
+                if (!isSuccess && chrome.scripting?.executeScript) {
+                  try {
+                    const execResults = await chrome.scripting.executeScript({
+                      target: { tabId: tab.id },
+                      func: (actionList: typeof actions) => {
+                        let successCount = 0;
+                        for (const act of actionList) {
+                          const targetId = act.fieldIdentifier || act.fieldId || '';
+                          const actType = (act.action || act.actionType || 'SET_VALUE').toUpperCase();
+                          const val = act.value;
+
+                          let el: HTMLElement | null = null;
+                          if (targetId) {
+                            el = document.getElementById(targetId) ||
+                              document.querySelector(`[name="${targetId}"]`) ||
+                              document.querySelector(`[data-field-id="${targetId}"]`) ||
+                              document.querySelector(`[data-testid="${targetId}"]`);
+                          }
+
+                          if (!el && targetId) {
+                            const lower = targetId.toLowerCase().replace(/[:\s]+$/, '').trim();
+                            const all = Array.from(document.querySelectorAll<HTMLElement>('input, select, textarea'));
+                            for (const c of all) {
+                              const cName = (c.getAttribute('name') || (c as any).name || '').toLowerCase();
+                              if (cName === lower) { el = c; break; }
+                              const cId = (c.id || '').toLowerCase();
+                              if (cId === lower) { el = c; break; }
+                              const lbl = c.closest('label')?.textContent?.trim().toLowerCase();
+                              if (lbl && (lbl === lower || lbl.startsWith(lower) || lower.startsWith(lbl))) { el = c; break; }
+                            }
+                          }
+
+                          if (!el) continue;
+                          if (el.tagName.toLowerCase() === 'input' && (el as HTMLInputElement).type?.toLowerCase() === 'file') continue;
+
+                          if (typeof el.focus === 'function') el.focus();
+                          const tag = el.tagName.toLowerCase();
+                          const inputType = ('type' in el && typeof (el as any).type === 'string') ? (el as any).type.toLowerCase() : tag;
+
+                          if (inputType === 'checkbox') {
+                            const chk = el as HTMLInputElement;
+                            const targetVal = String(val ?? '').trim().toLowerCase();
+                            if (chk.name && (Array.isArray(val) || (targetVal !== 'true' && targetVal !== 'false' && targetVal !== '1' && targetVal !== '0' && targetVal !== 'on' && targetVal !== ''))) {
+                              const desiredValues = Array.isArray(val)
+                                ? val.map((v) => String(v).trim().toLowerCase())
+                                : targetVal.split(/[,\s]+/).map((v) => v.trim().toLowerCase());
+
+                              const group = Array.from(document.querySelectorAll<HTMLInputElement>(`input[type="checkbox"][name="${chk.name}"]`));
+                              for (const box of group) {
+                                const boxVal = box.value.trim().toLowerCase();
+                                const boxLabel = (box.closest('label')?.textContent || '').trim().toLowerCase();
+                                const shouldBeChecked = desiredValues.some((dv) => dv === boxVal || dv === boxLabel || boxLabel.includes(dv));
+                                if (shouldBeChecked) {
+                                  if (!box.checked) {
+                                    if (typeof box.click === 'function') box.click();
+                                    if (!box.checked) box.checked = true;
+                                  }
+                                  box.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
+                                  box.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
+                                }
+                              }
+                              successCount++;
+                            } else {
+                              const desired = actType === 'CHECK' || (actType === 'SET_VALUE' && (val === true || val === 'true' || val === 1 || String(val).toLowerCase() === 'on'));
+                              if (chk.checked !== desired) {
+                                if (typeof chk.click === 'function') chk.click();
+                                if (chk.checked !== desired) chk.checked = desired;
+                              }
+                              chk.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
+                              chk.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
+                              if (chk.checked === desired) successCount++;
+                            }
+                          } else if (inputType === 'radio') {
+                            const rad = el as HTMLInputElement;
+                            let targetRadio = rad;
+                            const targetVal = String(val ?? '').trim().toLowerCase();
+                            if (rad.name && targetVal) {
+                              const group = Array.from(document.querySelectorAll<HTMLInputElement>(`input[type="radio"][name="${rad.name}"]`));
+                              const found = group.find((r) => r.value.trim().toLowerCase() === targetVal || r.closest('label')?.textContent?.trim().toLowerCase() === targetVal);
+                              if (found) targetRadio = found;
+                            }
+                            if (typeof targetRadio.focus === 'function') targetRadio.focus();
+                            if (!targetRadio.checked) {
+                              if (typeof targetRadio.click === 'function') targetRadio.click();
+                              if (!targetRadio.checked) targetRadio.checked = true;
+                            }
+                            targetRadio.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
+                            targetRadio.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
+                            if (targetRadio.checked) successCount++;
+                          } else if (tag === 'select') {
+                            const sel = el as HTMLSelectElement;
+                            const strVal = String(val ?? '').trim().toLowerCase();
+                            const opt = Array.from(sel.options).find((o) => o.value.toLowerCase() === strVal || o.text.trim().toLowerCase() === strVal);
+                            if (opt) {
+                              sel.value = opt.value;
+                              sel.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
+                              sel.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
+                              successCount++;
+                            }
+                          } else {
+                            const strVal = String(val ?? '');
+                            const proto = tag === 'textarea' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+                            const desc = Object.getOwnPropertyDescriptor(proto, 'value');
+                            if (desc?.set) {
+                              desc.set.call(el, strVal);
+                            } else {
+                              (el as HTMLInputElement).value = strVal;
+                            }
+                            el.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
+                            el.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
+                            el.dispatchEvent(new Event('blur', { bubbles: true }));
+                            if ((el as HTMLInputElement).value === strVal) successCount++;
+                          }
+                        }
+                        return { successCount, total: actionList.length };
+                      },
+                      args: [actions],
+                    });
+                    if (execResults?.[0]?.result && execResults[0].result.successCount > 0) {
+                      isSuccess = true;
+                    }
+                  } catch (directErr) {
+                    console.warn('[ConversationProvider] Direct DOM scripting execution failed:', directErr);
+                  }
+                }
+
+                // Honest execution check: if DOM execution or readback failed, update message
+                if (!isSuccess) {
+                  const targetLabel = turnResult.formActions![0]?.label || turnResult.formActions![0]?.fieldIdentifier || 'field';
+                  let failureNotice = `I prepared the update for ${targetLabel}, but could not update the webpage input. Please try again.`;
+                  const lang = turnResult.language?.responseLanguage || 'en';
+                  if (lang === 'hi') {
+                    failureNotice = `मैंने ${targetLabel} का नया मान तैयार किया है, लेकिन फ़ॉर्म में बदलाव नहीं हो पाया। कृपया दोबारा प्रयास करें।`;
+                  } else if (lang === 'mr') {
+                    failureNotice = `मी ${targetLabel} साठी माहिती तयार केली आहे, पण फॉर्ममध्ये बदल होऊ शकला नाही. कृपया पुन्हा प्रयत्न करा.`;
+                  } else if (lang === 'hinglish') {
+                    failureNotice = `Maine ${targetLabel} ka update taiyaar kiya tha, lekin form mein badlaav nahi ho paaya. Aap dobara koshish kar sakte hain.`;
+                  }
+
+                  setMessages((prev) =>
+                    prev.map((m) =>
+                      m.id === assistantMsg.id ? { ...m, content: failureNotice } : m,
+                    ),
+                  );
+                }
+              }
+            })();
+          }
+        }
 
         // 5. Update lastMessageAt in conversation list
         setConversations((prev) =>

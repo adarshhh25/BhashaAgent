@@ -455,6 +455,15 @@ export class VoiceSessionManager {
   }
 
   /**
+   * Stop audio capture without closing session or aborting turn
+   */
+  stopAudioCapture(): void {
+    if (this.micCapture) {
+      this.micCapture.stop();
+    }
+  }
+
+  /**
    * Destroy session manager completely
    */
   destroy(): void {

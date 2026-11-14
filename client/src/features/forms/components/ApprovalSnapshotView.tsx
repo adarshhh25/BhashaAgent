@@ -1,4 +1,4 @@
-import { ShieldCheck, AlertCircle, Loader2, CheckCircle2 } from 'lucide-react';
+import { ShieldCheck, CheckCircle2 } from 'lucide-react';
 import type { FormTask, TaskReviewResult, DetectedField } from '../types/form.types';
 import { BrowserExecutionPanel } from '../../browser/components/BrowserExecutionPanel';
 
@@ -6,8 +6,8 @@ interface ApprovalSnapshotViewProps {
   task: FormTask;
   review: TaskReviewResult | null;
   detectedFields?: DetectedField[];
-  isApprovingFinal: boolean;
-  onFinalApprove: () => Promise<void>;
+  isApprovingFinal?: boolean;
+  onFinalApprove?: () => Promise<void>;
 }
 
 function stringifyValue(val: unknown): string {
@@ -25,8 +25,6 @@ export function ApprovalSnapshotView({
   task,
   review,
   detectedFields,
-  isApprovingFinal,
-  onFinalApprove,
 }: ApprovalSnapshotViewProps) {
   const isApproved = task.status === 'APPROVED_FOR_FILLING';
   const isReady = review?.ready ?? false;
@@ -58,44 +56,14 @@ export function ApprovalSnapshotView({
             </div>
             <div>
               <h3 className="text-xs font-semibold text-text-primary">
-                {isApproved
-                  ? 'Form Approved for Filling'
-                  : isReady
-                  ? 'Ready for Final Authorization'
-                  : 'Review & Preparation Required'}
+                Ready for Browser Execution
               </h3>
               <p className="text-[11px] text-text-secondary mt-0.5">
-                Task Version: {task.version} • {approvedFieldsCount} of {fields.length} fields approved
+                Task Version: {task.version} • {approvedFieldsCount} of {fields.length} field{fields.length === 1 ? '' : 's'} prepared
               </p>
             </div>
           </div>
-
-          {!isApproved && (
-            <button
-              type="button"
-              disabled={!isReady || isApprovingFinal}
-              onClick={() => void onFinalApprove()}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-accent text-white text-xs font-medium hover:bg-accent/90 transition-all shadow-xs disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
-            >
-              {isApprovingFinal ? (
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              ) : (
-                <ShieldCheck className="w-3.5 h-3.5" />
-              )}
-              <span>Authorize Filling</span>
-            </button>
-          )}
         </div>
-
-        {/* Readiness Warning if not ready */}
-        {!isReady && !isApproved && (
-          <div className="p-2.5 bg-warning/10 border border-warning/20 rounded-lg text-warning text-xs flex items-center gap-2">
-            <AlertCircle className="w-4 h-4 shrink-0" />
-            <span>
-              All required fields must have valid, approved values before this form task can be authorized.
-            </span>
-          </div>
-        )}
 
         {/* Notice on safety boundary */}
         <p className="text-[10px] text-text-placeholder leading-normal pt-2 border-t border-divider/60">
